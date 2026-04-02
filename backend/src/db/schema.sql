@@ -12,6 +12,8 @@ CREATE TABLE users (
     balance DECIMAL(15, 2) DEFAULT 0.00,
     auth_tokens JSONB DEFAULT '{}',
     preferences JSONB DEFAULT '{}',
+    loyalty_points INT DEFAULT 0,
+    linked_methods JSONB DEFAULT '[]',
     verified_status BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -82,6 +84,7 @@ CREATE TABLE transaction_log (
     amount DECIMAL(15, 2) NOT NULL,
     transport_mode VARCHAR(50),
     status VARCHAR(50) DEFAULT 'pending',
+    metadata JSONB DEFAULT '{}',
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP

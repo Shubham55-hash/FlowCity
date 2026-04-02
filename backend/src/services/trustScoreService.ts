@@ -1,3 +1,6 @@
+import { safetyService } from './safetyService';
+import { dataIntegrationService } from './dataIntegrationService';
+
 interface ScoreBreakdown {
   historicalPunctuality: number;
   realTimeConditions: number;
@@ -21,55 +24,31 @@ interface CacheEntry {
 
 type CrowdLevel = 'Light' | 'Moderate' | 'Heavy' | 'Packed';
 
-/**
- * TrustScoreService: Core logic for predicting journey reliability.
- * Calculates a score (0-100) based on historical, real-time, and external factors.
- */
 class TrustScoreService {
   private cache: Map<string, CacheEntry> = new Map();
-  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private readonly CACHE_TTL = 5 * 60 * 1000;
   private readonly BASE_SCORE = 75;
   private readonly HALF_LIFE_DAYS = 7;
   private readonly SAFE_THRESHOLD = 80;
   private readonly RISKY_THRESHOLD = 40;
 
-  /**
-   * Main entry point to get the trust score for a route.
-   */
-  public async getTrustScore(
-    routeId: string,
-    time: Date,
-    userId: string
-  ): Promise<TrustScoreResponse> {
+  public async getTrustScore(routeId: string, time: Date, userId: string): Promise<TrustScoreResponse> {
     const cacheKey = `${routeId}_${userId}_${time.getHours()}_${Math.floor(time.getMinutes() / 5)}`;
     const cached = this.getFromCache(cacheKey);
     if (cached) return cached;
 
-    // 1. Calculate Individual Factors
     const histPunctuality = await this.calculateHistoricalPunctuality(routeId);
     const realTimeConditions = await this.calculateRealTimeConditions(routeId);
     const externalFactors = await this.calculateExternalFactors(routeId, time);
     const userFactor = await this.calculateUserRatingImpact(userId);
 
-    // 2. Weighted Sum Calculation
-    // Punctuality (40%), Real-time (30%), External (30%)
-    let trustScore = 
-      (histPunctuality * 0.4) + 
-      (realTimeConditions * 0.3) + 
-      (externalFactors * 0.3);
-
-    // 3. Apply User Rating Impact
-    trustScore += userFactor;
-
-    // 4. Clamp & Finalize
+    let trustScore = (histPunctuality * 0.4) + (realTimeConditions * 0.3) + (externalFactors * 0.3) + userFactor;
     trustScore = Math.max(0, Math.min(100, Math.round(trustScore)));
     
-    // 5. Determine Status
     let status: TrustStatus = 'Moderate';
     if (trustScore >= this.SAFE_THRESHOLD) status = 'Safe';
     else if (trustScore <= this.RISKY_THRESHOLD) status = 'Risky';
 
-    // 6. Build Breakdown & Reasoning
     const response: TrustScoreResponse = {
       trustScore,
       status,
@@ -78,113 +57,65 @@ class TrustScoreService {
         realTimeConditions: Math.round(realTimeConditions),
         externalFactors: Math.round(externalFactors),
       },
-      confidence: this.calculateConfidence(histPunctuality, realTimeConditions),
-      reasoning: this.generateReasoning(trustScore, status, histPunctuality, realTimeConditions, externalFactors),
+      confidence: Math.round((histPunctuality + realTimeConditions) / 2),
+      reasoning: this.generateReasoning(status),
     };
 
     this.setToCache(cacheKey, response);
     return response;
   }
 
-  /**
-   * Weights recent journeys higher using exponential decay (7-day half-life).
-   */
   private async calculateHistoricalPunctuality(routeId: string): Promise<number> {
-    // MOCK: Fetching last 30 days of journeys
-    // For CH-VR (Churchgate-Virar), simulate a history of frequent minor delays
     const isCHVR = routeId.includes('Churchgate') || routeId.includes('CH-VR');
     const mockJourneys = isCHVR 
-      ? [
-          { delay: 12, ageDays: 1 },
-          { delay: 8, ageDays: 2 },
-          { delay: 15, ageDays: 5 },
-          { delay: 4, ageDays: 10 },
-        ]
-      : [
-          { delay: 0, ageDays: 1 },
-          { delay: 5, ageDays: 3 },
-          { delay: 15, ageDays: 14 },
-        ];
+      ? [{ delay: 12, ageDays: 1 }, { delay: 8, ageDays: 2 }] 
+      : [{ delay: 0, ageDays: 1 }, { delay: 5, ageDays: 3 }];
 
-    let totalWeight = 0;
-    let weightedScore = 0;
-
+    let totalWeight = 0, weightedScore = 0;
     mockJourneys.forEach(j => {
       const weight = Math.pow(2, -(j.ageDays / this.HALF_LIFE_DAYS));
-      // Convert delay to a reliability score (e.g. 0 min = 100, 30 min = 0)
       const reliability = Math.max(0, 100 - (j.delay * 3.33));
       weightedScore += reliability * weight;
       totalWeight += weight;
     });
-
     return totalWeight > 0 ? weightedScore / totalWeight : this.BASE_SCORE;
   }
 
-  /**
-   * Real-time transit delays and traffic impact.
-   */
   private async calculateRealTimeConditions(routeId: string): Promise<number> {
-    // MOCK: Integration with Google/Uber/MSRTC APIs
-    // Use routeId to vary the delay (e.g. Bandra might be slower than Colaba)
-    const baseDelay = routeId.includes('Bandra') ? 15 : routeId.includes('Colaba') ? 2 : 8;
-    const currentDelay = baseDelay + (Math.random() * 4 - 2); // Small jitter
-    return Math.max(0, 100 - (currentDelay * 5));
+    const baseDelay = routeId.includes('Bandra') ? 15 : 8;
+    return Math.max(0, 100 - ((baseDelay + Math.random() * 4) * 5));
   }
 
-  /**
-   * Weather, Crowd, Events, and Time of Day logic.
-   */
   private async calculateExternalFactors(routeId: string, time: Date): Promise<number> {
-    let score = this.BASE_SCORE;
+    const weather = dataIntegrationService.getCachedData<any>('weather:mumbai');
+    const crowd = await dataIntegrationService.getCrowdData(routeId);
+    const events = await dataIntegrationService.getLocalEvents();
+    
+    let factor = 1.0;
+    if (weather?.isAdverse) factor *= 0.85;
+    if (crowd.density > 80) factor *= 0.7;
+    events.forEach((e: any) => { if (e.impactScore > 7) factor *= 0.9; });
 
-    // 1. Weather Impact (MOCK: Rain/Fog)
-    // Some routes are more impacted by rain (e.g. low-lying areas)
-    const isRaining = routeId.includes('Dadar') || routeId.includes('Parel'); 
-    if (isRaining) score -= 12;
+    let score = this.BASE_SCORE * factor;
 
-    // 2. Crowd Density (MOCK: High)
-    const getCrowdLevel = (): CrowdLevel => routeId.includes('BKC') ? 'Heavy' : 'Moderate';
-    const crowdLevel = getCrowdLevel();
-    if (crowdLevel === 'Heavy' || crowdLevel === 'Packed') score -= 15;
-
-    // 3. Time of Day Impact (Peak Hours: 8-10 AM, 6-9 PM)
-    const hour = time.getHours();
-    const isPeak = (hour >= 8 && hour <= 10) || (hour >= 18 && hour <= 21);
+    const isPeak = (time.getHours() >= 8 && time.getHours() <= 10) || (time.getHours() >= 18 && time.getHours() <= 21);
     if (isPeak) score -= 10;
-    else score += 5;
-
-    // 4. Events (MOCK: Strikes/Accidents)
-    const activeDisruptions = false;
-    if (activeDisruptions) score -= 30;
-
     return Math.max(0, Math.min(100, score));
   }
 
-  /**
-   * User ratings impact on the personal trust score.
-   */
   private async calculateUserRatingImpact(userId: string): Promise<number> {
-    // MOCK: Fetch user average rating
-    const avgRating = 4.5;
-    return (avgRating - 4.0) * 10; // Bonus for high ratings, penalty for low
+    return (4.5 - 4.0) * 10;
   }
 
-  private calculateConfidence(hist: number, real: number): number {
-    // Simple confidence based on data availability/consistency
-    return Math.round((hist + real) / 2);
-  }
-
-  private generateReasoning(score: number, status: TrustStatus, hist: number, real: number, ext: number): string {
+  private generateReasoning(status: TrustStatus): string {
     if (status === 'Safe') return 'Highly reliable journey; clear weather and optimal transit conditions detected.';
-    if (status === 'Risky') return 'High disruption risk due to peak-hour congestion, alerts, or heavy platform crowds.';
-    return 'Moderate reliability; expect minor variability in arrival times due to current city traffic.';
+    if (status === 'Risky') return 'High disruption risk due to peak-hour congestion or heavy crowds.';
+    return 'Moderate reliability; expect minor variability in arrival times.';
   }
 
   private getFromCache(key: string): TrustScoreResponse | null {
     const entry = this.cache.get(key);
-    if (entry && entry.expiry > Date.now()) return entry.data;
-    if (entry) this.cache.delete(key);
-    return null;
+    return (entry && entry.expiry > Date.now()) ? entry.data : null;
   }
 
   private setToCache(key: string, data: TrustScoreResponse) {
