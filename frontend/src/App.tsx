@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   EyeOff, 
@@ -86,7 +86,7 @@ const ActionTile = ({ icon: Icon, title, subtitle, active = false }: any) => (
   </motion.div>
 );
 
-const FlowView = () => (
+const FlowView = ({ score, selectedRoute }: { score: number, selectedRoute: string, [key: string]: any }) => (
   <motion.div 
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
@@ -94,7 +94,7 @@ const FlowView = () => (
     className="space-y-12"
   >
     <section className="flex flex-col items-center justify-center">
-      <TrustScore score={84} />
+      <TrustScore score={score} />
       <motion.p 
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -110,7 +110,7 @@ const FlowView = () => (
         <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 blur-3xl rounded-full -mr-16 -mt-16" />
         <div className="flex justify-between items-start mb-6">
           <div>
-            <h2 className="font-headline text-2xl font-bold tracking-tight mb-1">Andheri → BKC</h2>
+            <h2 className="font-headline text-2xl font-bold tracking-tight mb-1">{selectedRoute.replace('-', ' → ')}</h2>
             <div className="flex items-center gap-3 text-white/40 text-sm">
               <span className="flex items-center gap-1"><Clock className="w-4 h-4" /> 42 min</span>
               <span className="w-1 h-1 bg-white/20 rounded-full" />
@@ -141,7 +141,7 @@ const FlowView = () => (
   </motion.div>
 );
 
-const RoutesView = () => (
+const RoutesView = ({ onSelectRoute, ...props }: { onSelectRoute: (from: string, to: string) => void, [key: string]: any }) => (
   <motion.div 
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
@@ -152,14 +152,16 @@ const RoutesView = () => (
     {[
       { from: "Colaba", to: "Worli", time: "24 min", status: "Optimal", color: "text-secondary" },
       { from: "Bandra", to: "Juhu", time: "18 min", status: "Moderate", color: "text-primary" },
-      { from: "Powai", to: "Thane", time: "52 min", status: "Congested", color: "text-red-400" },
+      { from: "Churchgate", to: "Virar", time: "72 min", status: "Congested", color: "text-red-400" },
       { from: "Dadar", to: "Lower Parel", time: "12 min", status: "Optimal", color: "text-secondary" },
+      { from: "Andheri", to: "BKC", time: "42 min", status: "Active", color: "text-secondary" },
     ].map((route, i) => (
       <motion.div 
         key={i}
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ delay: i * 0.1 }}
+        onClick={() => onSelectRoute(route.from, route.to)}
         className="glass-card rounded-2xl p-5 flex items-center justify-between group cursor-pointer hover:bg-surface-bright transition-colors"
       >
         <div className="flex items-center gap-4">
@@ -283,6 +285,33 @@ const ProfileView = () => (
 
 export default function App() {
   const [view, setView] = useState<View>('flow');
+  const [score, setScore] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedRoute, setSelectedRoute] = useState<string>("Andheri-BKC");
+
+  useEffect(() => {
+    const fetchScore = async () => {
+      try {
+        setLoading(true);
+        // Using the backend port 5000 and passing routeId as query param
+        const response = await fetch(`http://localhost:5000/api/trust-score?routeId=${encodeURIComponent(selectedRoute)}`);
+        const data = await response.json();
+        setScore(data.trustScore);
+      } catch (error) {
+        console.error("Error fetching TrustScore:", error);
+        setScore(75); // Fallback
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchScore();
+  }, [selectedRoute]);
+
+  const handleSelectRoute = (from: string, to: string) => {
+    setSelectedRoute(`${from}-${to}`);
+    setView('flow'); // Switch back to flow view to see the new score
+  };
 
   return (
     <div className="min-h-screen bg-surface selection:bg-primary/30">
@@ -321,8 +350,8 @@ export default function App() {
 
       <main className="relative z-10 pt-28 pb-32 px-6 max-w-lg mx-auto">
         <AnimatePresence mode="wait">
-          {view === 'flow' && <FlowView key="flow" />}
-          {view === 'routes' && <RoutesView key="routes" />}
+          {view === 'flow' && <FlowView key="flow" score={score} selectedRoute={selectedRoute} />}
+          {view === 'routes' && <RoutesView key="routes" onSelectRoute={handleSelectRoute} />}
           {view === 'alerts' && <AlertsView key="alerts" />}
           {view === 'profile' && <ProfileView key="profile" />}
         </AnimatePresence>

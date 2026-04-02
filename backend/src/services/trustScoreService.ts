@@ -91,11 +91,20 @@ class TrustScoreService {
    */
   private async calculateHistoricalPunctuality(routeId: string): Promise<number> {
     // MOCK: Fetching last 30 days of journeys
-    const mockJourneys = [
-      { delay: 0, ageDays: 1 },
-      { delay: 5, ageDays: 3 },
-      { delay: 15, ageDays: 14 },
-    ];
+    // For CH-VR (Churchgate-Virar), simulate a history of frequent minor delays
+    const isCHVR = routeId.includes('Churchgate') || routeId.includes('CH-VR');
+    const mockJourneys = isCHVR 
+      ? [
+          { delay: 12, ageDays: 1 },
+          { delay: 8, ageDays: 2 },
+          { delay: 15, ageDays: 5 },
+          { delay: 4, ageDays: 10 },
+        ]
+      : [
+          { delay: 0, ageDays: 1 },
+          { delay: 5, ageDays: 3 },
+          { delay: 15, ageDays: 14 },
+        ];
 
     let totalWeight = 0;
     let weightedScore = 0;
@@ -116,7 +125,9 @@ class TrustScoreService {
    */
   private async calculateRealTimeConditions(routeId: string): Promise<number> {
     // MOCK: Integration with Google/Uber/MSRTC APIs
-    const currentDelay = 8; // minutes
+    // Use routeId to vary the delay (e.g. Bandra might be slower than Colaba)
+    const baseDelay = routeId.includes('Bandra') ? 15 : routeId.includes('Colaba') ? 2 : 8;
+    const currentDelay = baseDelay + (Math.random() * 4 - 2); // Small jitter
     return Math.max(0, 100 - (currentDelay * 5));
   }
 
@@ -127,11 +138,12 @@ class TrustScoreService {
     let score = this.BASE_SCORE;
 
     // 1. Weather Impact (MOCK: Rain/Fog)
-    const isRaining = false; 
+    // Some routes are more impacted by rain (e.g. low-lying areas)
+    const isRaining = routeId.includes('Dadar') || routeId.includes('Parel'); 
     if (isRaining) score -= 12;
 
     // 2. Crowd Density (MOCK: High)
-    const getCrowdLevel = (): CrowdLevel => 'Moderate';
+    const getCrowdLevel = (): CrowdLevel => routeId.includes('BKC') ? 'Heavy' : 'Moderate';
     const crowdLevel = getCrowdLevel();
     if (crowdLevel === 'Heavy' || crowdLevel === 'Packed') score -= 15;
 
