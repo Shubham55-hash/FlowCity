@@ -52,82 +52,28 @@ const initialState: JourneyState = {
 export const fetchRoutes = createAsyncThunk(
   'journey/fetchRoutes',
   async (params: any) => {
-    try {
-      const response = await axios.post('http://localhost:5000/api/journey/plan', {
-        from: params.from,
-        to: params.to,
-        time: params.time || new Date().toISOString(),
-        preferences: { priority: params.preference?.toLowerCase() || 'safety' }
-      });
-
-      const mainData = response.data.data;
-      const sim = mainData.simulationDetails;
-
-      const mapMode = (type: string) => {
-        if (!type) return 'Car';
-        if (type === 'local_train') return 'Train';
-        if (type === 'metro') return 'Metro';
-        if (type === 'bus') return 'Bus';
-        if (type === 'walk') return 'Walk';
-        return 'Car';
-      };
-
-      const mainRoute: Route = {
-        id: mainData.id,
-        mode: mainData.mode,
-        from: mainData.from,
-        to: mainData.to,
-        trustScore: mainData.trustScore,
-        status: mainData.status,
-        eta: mainData.eta,
-        cost: mainData.cost || 0,
-        safetyRating: sim?.overallSafetyScore || mainData.trustScore,
-        summary: sim?.summary || `${mainData.mode} journey`,
-        segments: (() => {
-          const segs: any[] = [];
-          (sim?.segments || []).forEach((s: any) => {
-            if (s.waitTimeMin && s.waitTimeMin > 0) {
-              segs.push({
-                mode: 'Wait',
-                duration: s.waitTimeMin,
-                instructions: `Wait for ${mapMode(s.type)} at ${s.from}`
-              });
-            }
-            segs.push({
-              mode: mapMode(s.type),
-              duration: s.predictedDurationMin,
-              instructions: `${s.from} to ${s.to}`
-            });
-          });
-          return segs;
-        })(),
-        ...getRouteCoordinates(mainData.from, mainData.to),
-        routeGeometry: sim?.routeGeometry,
-        dataSources: sim?.dataSources,
-      };
-
-      const alternatives: Route[] = (mainData.alternatives || []).map((alt: any) => ({
-        id: alt.id,
-        mode: alt.mode || alt.label,
-        from: mainData.from,
-        to: mainData.to,
-        trustScore: alt.trustScore || alt.safetyScore || 80,
-        status: (alt.trustScore || alt.safetyScore) > 80 ? 'Safe' : 'Moderate',
-        eta: alt.eta || alt.totalTimeMin,
-        cost: alt.predictedCost || 0,
-        safetyRating: alt.trustScore || alt.safetyScore || 80,
-        summary: alt.label || alt.mode,
-        segments: Array.isArray(alt.legs) 
-          ? alt.legs.map((l: string) => ({ mode: 'Multi', duration: 0, instructions: l }))
-          : [{ mode: 'Multi', duration: alt.eta || alt.totalTimeMin, instructions: 'Direct route' }],
-        ...getRouteCoordinates(mainData.from, mainData.to)
-      }));
-
-      return [mainRoute, ...alternatives];
-    } catch (error) {
-      console.error('API Error:', error);
-      throw error;
-    }
+    // MOCK: In production, call /api/journey/plan
+    await new Promise(res => setTimeout(res, 1000));
+    return [
+      {
+        id: 'R1', mode: 'Metro', from: params.from, to: params.to,
+        trustScore: 92, status: 'Safe', eta: 32, cost: 20, safetyRating: 95,
+        summary: 'Metro Line 1 + 5 min walk',
+        segments: [{ mode: 'Walk', duration: 5, instructions: 'Walk to Azad Nagar' }, { mode: 'Metro', duration: 27, instructions: 'Line 1 towards Ghatkopar' }]
+      },
+      {
+        id: 'R2', mode: 'Cab', from: params.from, to: params.to,
+        trustScore: 74, status: 'Moderate', eta: 45, cost: 250, safetyRating: 82,
+        summary: 'Direct Cab via Sea Link',
+        segments: [{ mode: 'Cab', duration: 45, instructions: 'Via Bandra-Worli Sea Link' }]
+      },
+      {
+        id: 'R3', mode: 'Bus', from: params.from, to: params.to,
+        trustScore: 55, status: 'Risky', eta: 70, cost: 15, safetyRating: 65,
+        summary: 'BEST Bus 202',
+        segments: [{ mode: 'Bus', duration: 70, instructions: 'Take 202 from Bus Depot' }]
+      }
+    ] as Route[];
   }
 );
 
