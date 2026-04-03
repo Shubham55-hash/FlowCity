@@ -1,5 +1,6 @@
 import { configureStore, createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
+import { getRouteCoordinates } from '../utils/stationCoordinates';
 
 interface Location {
   name: string;
@@ -19,7 +20,12 @@ interface Route {
   safetyRating: number;
   summary: string;
   segments: { mode: string; duration: number; instructions: string }[];
+  fromCoords?: { lat: number; lng: number };
+  toCoords?: { lat: number; lng: number };
+  routeGeometry?: Array<{ lat: number; lng: number }>;
+  dataSources?: string[];
 }
+
 
 interface JourneyState {
   results: Route[];
@@ -94,7 +100,10 @@ export const fetchRoutes = createAsyncThunk(
             });
           });
           return segs;
-        })()
+        })(),
+        ...getRouteCoordinates(mainData.from, mainData.to),
+        routeGeometry: sim?.routeGeometry,
+        dataSources: sim?.dataSources,
       };
 
       const alternatives: Route[] = (mainData.alternatives || []).map((alt: any) => ({
@@ -110,7 +119,8 @@ export const fetchRoutes = createAsyncThunk(
         summary: alt.label || alt.mode,
         segments: Array.isArray(alt.legs) 
           ? alt.legs.map((l: string) => ({ mode: 'Multi', duration: 0, instructions: l }))
-          : [{ mode: 'Multi', duration: alt.eta || alt.totalTimeMin, instructions: 'Direct route' }]
+          : [{ mode: 'Multi', duration: alt.eta || alt.totalTimeMin, instructions: 'Direct route' }],
+        ...getRouteCoordinates(mainData.from, mainData.to)
       }));
 
       return [mainRoute, ...alternatives];

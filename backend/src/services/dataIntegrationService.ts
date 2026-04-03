@@ -48,19 +48,21 @@ class DataIntegrationService extends EventEmitter {
   private readonly DEFAULT_TTL = 300000; // 5 minutes
   
   // Bull Queues
-  private transitQueue: Queue.Queue;
-  private weatherQueue: Queue.Queue;
+  private transitQueue!: Queue.Queue;
+  private weatherQueue!: Queue.Queue;
 
-  constructor() {
-    super();
-    
-    // Initialize Bull (using localhost Redis or sandbox)
+ constructor() {
+  super();
+  
+  try {
     const redisOptions = { redis: { port: 6379, host: '127.0.0.1' } };
     this.transitQueue = new Queue('transit-polling', redisOptions);
     this.weatherQueue = new Queue('weather-polling', redisOptions);
-
     this.initializeQueues();
+  } catch (err) {
+    console.warn('⚠️ Redis not available — running without background polling');
   }
+}
 
   private initializeQueues() {
     // 30-second GTFS Polling

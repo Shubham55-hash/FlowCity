@@ -46,6 +46,7 @@ router.post('/rescue/:journeyId/switch', authenticate as any, RescueController.s
 router.get('/routes/all', RouteController.getAll);
 router.get('/routes/nearby', RouteController.getNearby);
 router.get('/routes/:from/:to', RouteController.getSpecific);
+router.get('/geocode/autocomplete', RouteController.autocomplete);
 
 // ── SAFETY & HEATMAP ROUTES ──────────────────────────────────────────────────
 router.get('/safety/heatmap', SafetyController.getHeatmap);

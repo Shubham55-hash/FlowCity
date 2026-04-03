@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -13,6 +14,37 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
   const dispatch = useDispatch<AppDispatch>();
   const { results, selectedRoute, loading, searchParams } = useSelector((state: RootState) => state.journey);
   const [isExpanded, setIsExpanded] = useState<string | null>(null);
+  const [fromSuggestions, setFromSuggestions] = useState<Array<{name:string;lat:number;lng:number}>>([]);
+  const [toSuggestions, setToSuggestions] = useState<Array<{name:string;lat:number;lng:number}>>([]);
+  const [showFromSuggestions, setShowFromSuggestions] = useState(false);
+  const [showToSuggestions, setShowToSuggestions] = useState(false);
+
+  const fetchAutocomplete = async (query: string, type: 'from' | 'to') => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      if (type === 'from') setFromSuggestions([]); else setToSuggestions([]);
+      return;
+    }
+
+    try {
+      const res = await axios.get('http://localhost:5000/api/geocode/autocomplete', { params: { q: trimmed } });
+      const suggestions = (res.data?.data?.suggestions || []).slice(0, 8);
+      if (type === 'from') setFromSuggestions(suggestions); else setToSuggestions(suggestions);
+    } catch (err) {
+      console.warn('Autocomplete fetch error:', err);
+      if (type === 'from') setFromSuggestions([]); else setToSuggestions([]);
+    }
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => fetchAutocomplete(searchParams.from || '', 'from'), 250);
+    return () => clearTimeout(timer);
+  }, [searchParams.from]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => fetchAutocomplete(searchParams.to || '', 'to'), 250);
+    return () => clearTimeout(timer);
+  }, [searchParams.to]);
 
   const handleSearch = () => {
     dispatch(fetchRoutes(searchParams));
@@ -48,7 +80,23 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
               className="w-full bg-surface-bright/30 border border-white/5 rounded-2xl py-4 pl-12 pr-4 focus:outline-none focus:border-primary/50 transition-all font-medium"
               value={searchParams.from}
               onChange={(e) => dispatch(updateSearchParams({ from: e.target.value }))}
+              onFocus={() => setShowFromSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowFromSuggestions(false), 150)}
             />
+            {showFromSuggestions && fromSuggestions.length > 0 && (
+              <div className="absolute left-0 right-0 mt-1 bg-surface/95 border border-white/10 shadow-xl z-20 rounded-xl max-h-64 overflow-y-auto">
+                {fromSuggestions.map((item) => (
+                  <button
+                    key={item.name}
+                    onMouseDown={(e) => { e.preventDefault(); dispatch(updateSearchParams({ from: item.name })); setShowFromSuggestions(false); }}
+                    className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors"
+                  >
+                    <span className="font-semibold">{item.name}</span>
+                    <span className="block text-xs text-white/50">{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="relative group">
             <Search className="absolute left-4 top-12 -translate-y-1/2 text-white/20 w-5 h-5" />
@@ -59,35 +107,94 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
               className="w-full bg-surface-bright/30 border border-white/5 rounded-2xl py-4 pl-12 pr-4 focus:outline-none focus:border-primary/50 transition-all font-medium"
               value={searchParams.to}
               onChange={(e) => dispatch(updateSearchParams({ to: e.target.value }))}
+              onFocus={() => setShowToSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowToSuggestions(false), 150)}
             />
+            {showToSuggestions && toSuggestions.length > 0 && (
+              <div className="absolute left-0 right-0 mt-1 bg-surface/95 border border-white/10 shadow-xl z-20 rounded-xl max-h-64 overflow-y-auto">
+                {toSuggestions.map((item) => (
+                  <button
+                    key={item.name}
+                    onMouseDown={(e) => { e.preventDefault(); dispatch(updateSearchParams({ to: item.name })); setShowToSuggestions(false); }}
+                    className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors"
+                  >
+                    <span className="font-semibold">{item.name}</span>
+                    <span className="block text-xs text-white/50">{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-           <div className="flex items-center gap-3 bg-surface-bright/20 rounded-xl p-3 border border-white/5">
+           <div className="flex items-center gap-3 bg-surface-bright/20 rounded-xl p-3 border border-white/5 cursor-pointer" onClick={() => {
+             const now = new Date();
+             dispatch(updateSearchParams({ time: now.toISOString() }));
+           }}>
              <Calendar className="w-4 h-4 text-primary" />
-             <span className="text-sm font-medium">Today</span>
+             <span className="text-sm font-medium">Set Now</span>
            </div>
-           <div className="flex items-center gap-3 bg-surface-bright/20 rounded-xl p-3 border border-white/5">
+           <div className="flex items-center gap-3 bg-surface-bright/20 rounded-xl p-3 border border-white/5 cursor-pointer" onClick={() => {
+             const today = new Date();
+             today.setHours(9,0,0,0);
+             dispatch(updateSearchParams({ time: today.toISOString() }));
+           }}>
              <Clock className="w-4 h-4 text-primary" />
-             <span className="text-sm font-medium">Now</span>
+             <span className="text-sm font-medium">Set 09:00</span>
            </div>
-           <div className="col-span-2 flex items-center gap-1 bg-surface-bright/20 rounded-xl p-1 border border-white/5">
-              {['Safety', 'Time', 'Cost'].map((pref) => (
-                <button
-                  key={pref}
-                  onClick={() => dispatch(updateSearchParams({ preference: pref }))}
-                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
-                    searchParams.preference === pref 
-                      ? 'bg-primary text-surface shadow-lg' 
-                      : 'text-white/40 hover:text-white/70'
-                  }`}
-                >
-                  {pref}
-                </button>
-              ))}
+         </div>
+
+         <div className="grid grid-cols-2 gap-4 mt-4">
+           <div className="flex flex-col gap-2">
+             <label className="text-xs font-headline tracking-widest text-white/40 uppercase">Travel Date</label>
+             <input
+               type="date"
+               className="w-full bg-surface-bright/30 border border-white/5 rounded-lg p-2 focus:outline-none focus:border-primary/50"
+               value={searchParams.time ? new Date(searchParams.time).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}
+               onChange={(e) => {
+                 const d = e.target.value;
+                 const current = searchParams.time ? new Date(searchParams.time) : new Date();
+                 const [h, m] = [current.getHours(), current.getMinutes()];
+                 const updated = new Date(`${d}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
+                 dispatch(updateSearchParams({ time: updated.toISOString() }));
+               }}
+             />
            </div>
-        </div>
+
+           <div className="flex flex-col gap-2">
+             <label className="text-xs font-headline tracking-widest text-white/40 uppercase">Travel Time</label>
+             <input
+               type="time"
+               className="w-full bg-surface-bright/30 border border-white/5 rounded-lg p-2 focus:outline-none focus:border-primary/50"
+               value={searchParams.time ? new Date(searchParams.time).toTimeString().slice(0, 5) : new Date().toTimeString().slice(0, 5)}
+               onChange={(e) => {
+                 const t = e.target.value;
+                 const current = searchParams.time ? new Date(searchParams.time) : new Date();
+                 const [h, m] = t.split(':').map(Number);
+                 const updated = new Date(current);
+                 updated.setHours(h, m, 0, 0);
+                 dispatch(updateSearchParams({ time: updated.toISOString() }));
+               }}
+             />
+           </div>
+         </div>
+
+         <div className="col-span-full flex flex-wrap gap-2 mt-4">
+           {['Safety', 'Time', 'Cost'].map((pref) => (
+             <button
+               key={pref}
+               onClick={() => dispatch(updateSearchParams({ preference: pref }))}
+               className={`py-2 px-3 rounded-lg text-xs font-bold transition-all ${
+                 searchParams.preference === pref 
+                   ? 'bg-primary text-surface shadow-lg' 
+                   : 'text-white/40 hover:text-white/70'
+               }`}
+             >
+               {pref}
+             </button>
+           ))}
+         </div>
 
         <button 
           onClick={handleSearch}
@@ -126,6 +233,13 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                       <span className="flex items-center gap-1"><Clock className="w-4 h-4" /> {route.eta} min</span>
                       <span className="flex items-center gap-1">₹ {route.cost}</span>
                       <span className="flex items-center gap-1 text-secondary"><Shield className="w-4 h-4" /> {route.safetyRating}% Solid</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
+                      {route.dataSources?.map((source) => (
+                        <span key={`${route.id}-${source}`} className="px-2 py-1 rounded-full bg-white/10 text-white/80 border border-white/20">
+                          {source.includes('fallback') ? 'Fallback' : source.includes('OpenRoute') ? 'Live ORS' : source}
+                        </span>
+                      ))}
                     </div>
                   </div>
                 </div>

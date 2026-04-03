@@ -5,14 +5,15 @@ import { io, Socket } from "socket.io-client";
 import { 
   EyeOff, LifeBuoy, ShieldCheck, History, Zap, 
   Bell, User, Clock, GitBranch, 
-  CloudSun, ChevronRight, AlertTriangle, CheckCircle2
+  CloudSun, ChevronRight, AlertTriangle, CheckCircle2, Map
 } from "lucide-react";
 import JourneyPlanner from "./components/JourneyPlanner";
 import GhostCommuteView from "./components/GhostCommuteView";
 import CommuteReplayDashboard from "./components/CommuteReplayDashboard";
+import RouteHeatmap from "./components/RouteHeatmap";
 import { RootState, AppDispatch } from "./store/journeySlice";
 
-type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'safety-map' | 'plan' | 'history';
+type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'safety-map' | 'plan' | 'history' | 'heatmap';
 
 const TrustScore = ({ score }: { score: number }) => {
   const radius = 110;
@@ -45,17 +46,33 @@ const ActionTile = ({ icon: Icon, title, subtitle, active = false, onClick }: an
     whileHover={{ scale: 1.02 }}
     whileTap={{ scale: 0.98 }}
     onClick={onClick}
-    className={`bg-surface-container aspect-square rounded-2xl p-5 flex flex-col justify-between cursor-pointer group transition-all hover:bg-surface-bright border border-white/5 ${active ? 'border-primary/40' : ''}`}
+    className={`relative aspect-square rounded-2xl p-5 flex flex-col justify-between cursor-pointer group transition-all overflow-hidden border ${active ? 'border-primary/60' : 'border-primary/40'}`}
   >
-    <Icon className={`w-8 h-8 ${active ? 'text-primary' : 'text-white/40'}`} />
-    <div>
-      <span className="block font-headline text-sm font-bold tracking-tight">{title}</span>
-      <span className="text-[10px] text-white/40 uppercase tracking-tighter">{subtitle}</span>
+    {/* Background gradient - Yellow themed */}
+    <div className={`absolute inset-0 transition-all ${active ? 'bg-gradient-to-br from-primary/50 via-primary/20 to-primary/30' : 'bg-gradient-to-br from-primary/30 via-primary/15 to-primary/20'}`} />
+    
+    {/* Icon background */}
+    <div className="absolute inset-0 flex items-center justify-center opacity-15 group-hover:opacity-25 transition-opacity">
+      <Icon className="w-32 h-32 text-white" strokeWidth={0.5} />
+    </div>
+    
+    {/* Content */}
+    <div className="relative z-10" />
+    <div className="relative z-10">
+      <span className="block font-headline text-sm font-bold tracking-tight text-white">{title}</span>
+      <span className="text-[10px] text-white/70 uppercase tracking-tighter">{subtitle}</span>
+    </div>
+
+    {/* Small icon in corner */}
+    <div className="absolute top-4 right-4 z-10">
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center backdrop-blur-sm ${active ? 'bg-white/30 border border-white/40' : 'bg-white/20 border border-white/30'}`}>
+        <Icon className="w-5 h-5 text-surface" strokeWidth={1.5} />
+      </div>
     </div>
   </motion.div>
 );
 
-const FlowView = ({ score, selectedRoute, onGhostClick, onSafetyMapClick, onRescueClick, onHistoryClick }: any) => (
+const FlowView = ({ score, selectedRoute, onGhostClick, onSafetyMapClick, onRescueClick, onHistoryClick, onHeatmapClick }: any) => (
   <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
     <section className="flex flex-col items-center justify-center pt-4">
       <TrustScore score={selectedRoute?.trustScore || score} />
@@ -93,7 +110,7 @@ const FlowView = ({ score, selectedRoute, onGhostClick, onSafetyMapClick, onResc
       <ActionTile icon={EyeOff} title="Ghost Commute" subtitle="Stimulate Flow" onClick={onGhostClick} active={!!selectedRoute} />
       <ActionTile icon={LifeBuoy} title="Rescue Shield" subtitle="Smart Backup" onClick={onRescueClick} />
       <ActionTile icon={ShieldCheck} title="Safety Map" subtitle="Secure Zones" onClick={onSafetyMapClick} />
-      <ActionTile icon={History} title="Commute Replay" subtitle="Audit Archive" onClick={onHistoryClick} />
+      <ActionTile icon={Map} title="Route Heatmap" subtitle="Traffic View" onClick={onHeatmapClick} />
     </section>
   </motion.div>
 );
@@ -109,7 +126,7 @@ const AlertsView = () => (
 
 export default function App() {
   const dispatch = useDispatch<AppDispatch>();
-  const { selectedRoute } = useSelector((state: RootState) => state.journey);
+  const { selectedRoute, results: allRoutes } = useSelector((state: RootState) => state.journey);
   
   const [view, setView] = useState<View>('flow');
   const [score] = useState<number>(88);
@@ -130,7 +147,7 @@ export default function App() {
   };
 
   const NavButton = ({ active, onClick, icon: Icon, label, isMain = false }: any) => (
-    <button onClick={onClick} className={`flex flex-col items-center gap-1 transition-all ${active ? 'text-primary' : 'text-white/40'}`}>
+    <button onClick={onClick} className={`flex flex-col items-center gap-1 transition-all ${active ? 'text-primary' : 'text-white/70'}`}>
       <div className={`${isMain ? 'bg-primary text-surface p-3 rounded-full shadow-[0_0_25px_#ffbf0088] mb-1' : ''}`}>
         <Icon size={isMain ? 26 : 22} />
       </div>
@@ -147,7 +164,7 @@ export default function App() {
       </div>
 
       <header className="fixed top-0 w-full z-50 flex justify-between items-center px-6 py-5 bg-surface/80 backdrop-blur-2xl border-b border-white/5">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setView('flow')}>
            <Zap className="text-primary w-5 h-5" />
            <h1 className="font-headline text-xs font-black uppercase tracking-[0.4em]">FlowCity Central</h1>
         </div>
@@ -167,6 +184,7 @@ export default function App() {
               onSafetyMapClick={() => setView('safety-map')}
               onRescueClick={() => setView('alerts')}
               onHistoryClick={() => setView('history')}
+              onHeatmapClick={() => setView('heatmap')}
             />
           )}
           {view === 'ghost' && <GhostCommuteView key="ghost" />}
@@ -174,6 +192,7 @@ export default function App() {
           {view === 'plan' && <JourneyPlanner key="plan" onNavigate={() => setView('flow')} />}
           {view === 'history' && <CommuteReplayDashboard key="history" />}
           {view === 'alerts' && <AlertsView key="alerts" />}
+          {view === 'heatmap' && <RouteHeatmap key="heatmap" routes={allRoutes && allRoutes.length > 0 ? allRoutes : selectedRoute ? [selectedRoute] : []} selectedRoute={selectedRoute} />}
         </AnimatePresence>
       </main>
 

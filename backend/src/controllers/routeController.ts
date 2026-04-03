@@ -1,5 +1,6 @@
 
 import { Request, Response } from 'express';
+import { geocoderService } from '../services/geocoderService';
 
 export class RouteController {
   public static async getAll(req: Request, res: Response) {
@@ -37,5 +38,20 @@ export class RouteController {
         ]
       }
     });
+  }
+
+  public static async autocomplete(req: Request, res: Response) {
+    try {
+      const query = (req.query.q as string || '').trim();
+      if (!query) {
+        return res.json({ status: 'success', data: { suggestions: [] } });
+      }
+
+      const suggestions = await geocoderService.autocomplete(query, 8);
+      return res.json({ status: 'success', data: { suggestions } });
+    } catch (error) {
+      console.error('Autocomplete API error:', error);
+      return res.status(500).json({ status: 'error', message: 'Autocomplete failed' });
+    }
   }
 }

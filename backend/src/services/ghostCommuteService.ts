@@ -24,6 +24,8 @@ import { apiRateLimiter } from '../middleware/rateLimiter';
 
 const env = (key: string) => process.env[key];
 const hasKey = (key: string) => !!env(key) && env(key) !== `your_${key.toLowerCase()}_here`;
+const hasIRCTCKey = () => hasKey('IRCTC_API_KEY');
+const hasRailRadarKey = () => hasKey('RAILRADAR_API_KEY');
 
 // ──────────────── Public Input Types ─────────────────────────────────────────
 
@@ -61,6 +63,11 @@ interface RawSegment {
   crowdFactor: number;
   transferRiskMin: number;
   dataSource: 'real' | 'heuristic'; // transparency flag
+}
+
+interface ORSDirectionsResult {
+  segments: RawSegment[];
+  geometry: Array<{ lat: number; lng: number }>;
 }
 
 // ──────────────── Public Output Types ────────────────────────────────────────
@@ -126,6 +133,7 @@ export interface SimulationResult {
   overallSafetyScore: number;
   totalPredictedCost: number;
   weather: WeatherCondition;
+  routeGeometry: Array<{ lat: number; lng: number }>;
   dataSources: string[]; // which APIs actually responded
   summary: string;
 }
@@ -167,6 +175,16 @@ class GhostCommuteService {
     headers: {
       'x-rapidapi-key': env('IRCTC_API_KEY') || '',
       'x-rapidapi-host': env('IRCTC_API_HOST') || 'irctc1.p.rapidapi.com',
+    },
+  });
+
+  private railRadarApi: AxiosInstance = axios.create({
+    baseURL: env('RAILRADAR_API_BASE_URL') || 'https://api.railradar.org',
+    timeout: 5000,
+    headers: {
+      // RailRadar may accept API key either as a bearer token or x-api-key header.
+      Authorization: env('RAILRADAR_API_KEY') ? `Bearer ${env('RAILRADAR_API_KEY')}` : '',
+      'x-api-key': env('RAILRADAR_API_KEY') || '',
     },
   });
 
@@ -226,11 +244,19 @@ class GhostCommuteService {
   // Uses ORS foot-walking for walk legs; falls back to heuristic for transit.
   // Free: 2,000 req/day — https://openrouteservice.org
   // ──────────────────────────────────────────────────────────────────────────
+  private getGeoDistanceKm(start: Location, end: Location): number {
+    const R = 6371;
+    const dLat = ((end.lat - start.lat) * Math.PI) / 180;
+    const dLng = ((end.lng - start.lng) * Math.PI) / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos((start.lat * Math.PI) / 180) * Math.cos((end.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
   private async fetchORSDirections(
     start: Location,
     end: Location,
     departureTime: Date
-  ): Promise<RawSegment[] | null> {
+  ): Promise<ORSDirectionsResult | null> {
     if (!hasKey('OPENROUTE_API_KEY')) return null;
 
     try {
@@ -241,20 +267,25 @@ class GhostCommuteService {
           [end.lng, end.lat],
         ],
         instructions: false,
-        geometry: false,
+        geometry: true,
+        geometry_simplify: true,
       });
 
       const route = resp.data?.routes?.[0];
       if (!route) return null;
 
-      const totalDistKm = (route.summary?.distance ?? 0) / 1000;
+      const orsDistKm = (route.summary?.distance ?? 0) / 1000;
       const totalDrivingMin = Math.ceil((route.summary?.duration ?? 0) / 60);
+      const geoDistKm = this.getGeoDistanceKm(start, end);
+      const totalDistKm = Math.min(orsDistKm, Math.max(geoDistKm, orsDistKm * 0.75)); // avoid huge detours
 
       // Convert ORS driving estimate → Mumbai transit decomposition
       const peak = this.isPeakHour(departureTime);
       const superPeak = this.isSuperPeak(departureTime);
 
-      // ORS gives us real distance — use it to build a realistic transit route
+      // Use direct geographic distance where routing is too long
+      const transitBaseDistKm = Math.max(geoDistKm, Math.min(totalDistKm, geoDistKm * 1.2));
+
       const segments: RawSegment[] = [];
 
       if (totalDistKm < 1.5) {
@@ -273,8 +304,11 @@ class GhostCommuteService {
           { type: 'walk', from: `${end.name} Metro Stn`, to: end.name, toLatLng: { lat: end.lat, lng: end.lng }, fromLatLng: { lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'real' },
         );
       } else {
-        // Long route: walk + local train (ORS-distance calibrated)
-        const trainMin = Math.max(totalDrivingMin, Math.round(totalDistKm * 1.4));
+        // Long route: walk + local train (realistic Mumbai suburban train calibration)
+        // Use distance-based rail speed (approx 40 km/h) plus dwell stops and transfer overhead.
+        const trainDurationFromDistance = Math.round(transitBaseDistKm / 0.67);  // 0.67 km/min = 40 km/h
+        const trainMin = Math.max(20, trainDurationFromDistance + (peak ? 12 : 8));
+
         segments.push(
           { type: 'walk', from: start.name, to: `${start.name} Station`, fromLatLng: { lat: start.lat, lng: start.lng }, toLatLng: { lat: start.lat + 0.004, lng: start.lng + 0.004 }, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'real' },
           { type: 'local_train', from: `${start.name} Station`, to: `${end.name} Station`, baseDurationMin: trainMin, historicalDelayMin: superPeak ? 12 : peak ? 7 : 2, crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, transferRiskMin: 5, dataSource: 'real' },
@@ -282,7 +316,8 @@ class GhostCommuteService {
         );
       }
 
-      return segments.length ? segments : null;
+      const geometry = (route.geometry?.coordinates || []).map((c: any) => ({ lat: c[1], lng: c[0] }));
+      return segments.length ? { segments, geometry } : null;
     } catch {
       return null;
     }
@@ -292,6 +327,155 @@ class GhostCommuteService {
   // REAL API #2 — ORS Walk Duration (replaces Google Distance Matrix)
   // Uses ORS foot-walking profile for accurate pedestrian timings.
   // ──────────────────────────────────────────────────────────────────────────
+  private decodePolyline(encoded: string): Array<{ lat: number; lng: number }> {
+    const points = [];
+    let index = 0;
+    const len = encoded.length;
+    let lat = 0;
+    let lng = 0;
+
+    while (index < len) {
+      let b;
+      let shift = 0;
+      let result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const deltaLat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lat += deltaLat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const deltaLng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lng += deltaLng;
+
+      points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+    }
+
+    return points;
+  }
+
+  private async fetchGoogleDirections(
+    start: Location,
+    end: Location,
+    departureTime: Date
+  ): Promise<ORSDirectionsResult | null> {
+    const googleKey = env('GOOGLE_MAPS_API_KEY');
+    if (!googleKey || googleKey === 'your_google_api_key_here') return null;
+
+    try {
+      const url = 'https://maps.googleapis.com/maps/api/directions/json';
+      const response = await axios.get(url, {
+        params: {
+          origin: `${start.lat},${start.lng}`,
+          destination: `${end.lat},${end.lng}`,
+          key: googleKey,
+          departure_time: Math.floor(departureTime.getTime() / 1000),
+          mode: 'transit',
+          alternatives: true,
+          region: 'in',
+          language: 'en'
+        },
+        timeout: 8000,
+      });
+
+      if (response.data?.status !== 'OK' || !response.data.routes?.length) {
+        return null;
+      }
+
+      const route = response.data.routes[0];
+      if (!route.legs || !route.legs.length) return null;
+      const leg = route.legs[0];
+
+      const collectedSegments: RawSegment[] = [];
+      let overallGeometry: Array<{ lat: number; lng: number }> = [];
+
+      for (const step of leg.steps || []) {
+        const stepMode = step.travel_mode;
+        const stepStart = step.start_location;
+        const stepEnd = step.end_location;
+        const stepDuration = Math.ceil((step.duration?.value || 0) / 60);
+        const stepPolyline = step.polyline?.points ? this.decodePolyline(step.polyline.points) : [];
+
+        if (stepPolyline.length) {
+          overallGeometry = overallGeometry.concat(stepPolyline);
+        }
+
+        if (stepMode === 'WALK') {
+          collectedSegments.push({
+            type: 'walk',
+            from: step.html_instructions ? step.html_instructions.replace(/<[^>]+>/g, '') : `${start.name} Walk`,
+            to: step.html_instructions ? step.html_instructions.replace(/<[^>]+>/g, '') : `${end.name}`,
+            fromLatLng: { lat: stepStart.lat, lng: stepStart.lng },
+            toLatLng: { lat: stepEnd.lat, lng: stepEnd.lng },
+            baseDurationMin: Math.max(1, stepDuration),
+            historicalDelayMin: 0,
+            crowdFactor: this.isPeakHour(departureTime) ? 1.25 : 1.0,
+            transferRiskMin: 0,
+            dataSource: 'real',
+          });
+        } else if (stepMode === 'TRANSIT') {
+          const transit = step.transit_details || {};
+          const vehicle = transit.line?.vehicle?.type || '';
+          let legType: LegType = 'local_train';
+          if (vehicle === 'BUS') legType = 'bus';
+          if (vehicle === 'SUBWAY' || vehicle === 'METRO') legType = 'metro';
+          if (vehicle === 'TRAM') legType = 'bus';
+          if (vehicle === 'HEAVY_RAIL') legType = 'local_train';
+          if (vehicle === 'RAIL') legType = 'local_train';
+
+          collectedSegments.push({
+            type: legType,
+            from: transit.departure_stop?.name || step.html_instructions || `${start.name} Station`,
+            to: transit.arrival_stop?.name || step.html_instructions || `${end.name} Station`,
+            fromLatLng: { lat: stepStart.lat, lng: stepStart.lng },
+            toLatLng: { lat: stepEnd.lat, lng: stepEnd.lng },
+            baseDurationMin: Math.max(1, stepDuration),
+            historicalDelayMin: 0,
+            crowdFactor: this.isPeakHour(departureTime) ? 1.5 : 1.1,
+            transferRiskMin: 4,
+            dataSource: 'real',
+          });
+
+          // Add start and end walking transfer if present
+        } else {
+          // fallback: use driving/cab estimation
+          collectedSegments.push({
+            type: 'auto',
+            from: step.start_location ? `${stepStart.lat},${stepStart.lng}` : start.name,
+            to: step.end_location ? `${stepEnd.lat},${stepEnd.lng}` : end.name,
+            fromLatLng: { lat: stepStart.lat, lng: stepStart.lng },
+            toLatLng: { lat: stepEnd.lat, lng: stepEnd.lng },
+            baseDurationMin: Math.max(1, stepDuration),
+            historicalDelayMin: 0,
+            crowdFactor: this.isPeakHour(departureTime) ? 1.25 : 1,
+            transferRiskMin: 2,
+            dataSource: 'real',
+          });
+        }
+      }
+
+      if (collectedSegments.length === 0) return null;
+
+      if (overallGeometry.length === 0) {
+        // fallback geometry from start/end
+        overallGeometry = [{ lat: start.lat, lng: start.lng }, { lat: end.lat, lng: end.lng }];
+      }
+
+      return { segments: collectedSegments, geometry: overallGeometry };
+    } catch (error) {
+      console.warn('Google Directions API failure:', (error as any)?.message || error);
+      return null;
+    }
+  }
+
   private async fetchORSWalkDuration(
     fromLat: number, fromLng: number,
     toLat: number,   toLng: number
@@ -371,14 +555,52 @@ class GhostCommuteService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  // REAL API #4a — RailRadar (preferred if configured) — local train delay/schedule
+  // ──────────────────────────────────────────────────────────────────────────
+  private async fetchRailRadarTrainData(fromCode: string, toCode: string): Promise<{ delayMin: number, durationMin: number | null, source: 'railradar' } | null> {
+    if (!hasRailRadarKey()) return null;
+    try {
+      const resp = await this.railRadarApi.get('/api/v1/trains/between', {
+        params: { from: fromCode, to: toCode },
+      });
+
+      const trains: any[] = resp.data?.trains || [];
+      if (!Array.isArray(trains) || trains.length === 0) return null;
+
+      // If RailRadar provides travel time, use it. Else fallback to 0.
+      const durations = trains
+        .map((t: any) => (typeof t.travelTimeMinutes === 'number' ? t.travelTimeMinutes : null))
+        .filter((n: number | null) => n !== null) as number[];
+
+      const durationMin = durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null;
+
+      // RailRadar does not expose precise delay in this endpoint; use heuristic 0, but it could be extended to /api/v1/trains/{number}?dataType=live.
+      return { delayMin: 0, durationMin, source: 'railradar' };
+    } catch {
+      return null;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // REAL API #4 — Indian Railways (RapidAPI) — local train delay
   // ──────────────────────────────────────────────────────────────────────────
-  public async fetchTrainData(fromStation: string, toStation: string): Promise<{ delayMin: number, durationMin: number | null } | null> {
-    if (!hasKey('IRCTC_API_KEY')) return null;
+  public async fetchTrainData(fromStation: string, toStation: string): Promise<{ delayMin: number, durationMin: number | null, source?: 'irctc' | 'railradar' | 'fallback' } | null> {
+    const fromCode = this.getStationCode(fromStation);
+    const toCode = this.getStationCode(toStation);
+
+    if (hasRailRadarKey()) {
+      const railRadarResult = await this.fetchRailRadarTrainData(fromCode, toCode);
+      if (railRadarResult) {
+        return railRadarResult;
+      }
+    }
+
+    if (!hasIRCTCKey()) {
+      // No IRCTC key; use a fallback estimate rather than failing.
+      return { delayMin: 2, durationMin: null, source: 'fallback' };
+    }
+
     try {
-      const fromCode = this.getStationCode(fromStation);
-      const toCode = this.getStationCode(toStation);
-      
       const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
       const resp = await this.railwayApi.get(`/api/v3/trainsList`, {
         params: {
@@ -386,30 +608,27 @@ class GhostCommuteService {
           toStationCode: toCode,
           dateOfJourney: today,
           classType: 'SL',
-          quota: 'GN'
+          quota: 'GN',
         },
       });
 
       const trains: any[] = resp.data?.data || [];
-      if (!trains.length) return null;
+      if (!trains.length) {
+        return { delayMin: 2, durationMin: null, source: 'fallback' };
+      }
 
-      // Calculate average delay
       const avgDelay = trains.slice(0, 3).reduce((sum: number, t: any) => sum + (t.delay_minutes ?? 0), 0) / Math.min(trains.length, 3);
-      
-      // Parse scheduled duration from the most representative train (expressed as "HH:MM")
       const primaryTrain = trains[0];
       let durationMin = null;
       if (primaryTrain?.duration) {
-         const [h, m] = primaryTrain.duration.split(':').map(Number);
-         durationMin = h * 60 + m;
+        const [h, m] = primaryTrain.duration.split(':').map(Number);
+        durationMin = h * 60 + m;
       }
 
-      return { 
-        delayMin: Math.round(avgDelay), 
-        durationMin 
-      };
-    } catch {
-      return null;
+      return { delayMin: Math.round(avgDelay), durationMin, source: 'irctc' };
+    } catch (error: any) {
+      console.warn('IRCTC train data fetch failed, falling back:', error?.response?.status || error?.message || error);
+      return { delayMin: 2, durationMin: null, source: 'fallback' };
     }
   }
 
@@ -834,12 +1053,23 @@ class GhostCommuteService {
 
     // ── 1. Route decomposition (ORS real data or heuristic fallback) ─────
     let rawSegments: RawSegment[] | null = null;
+    let routeGeometry: Array<{ lat: number; lng: number }> | null = null;
 
-    rawSegments = await this.fetchORSDirections(startLocation, endLocation, departureTime);
-    if (rawSegments) {
-      usedAPIs.push('OpenRouteService Directions API');
+    const googleResult = await this.fetchGoogleDirections(startLocation, endLocation, departureTime);
+    if (googleResult && googleResult.segments && googleResult.segments.length > 0) {
+      rawSegments = googleResult.segments;
+      routeGeometry = googleResult.geometry;
+      usedAPIs.push('Google Maps Directions API');
     } else {
-      rawSegments = this.heuristicDecompose(startLocation, endLocation, departureTime);
+      const orsResult = await this.fetchORSDirections(startLocation, endLocation, departureTime);
+      if (orsResult && orsResult.segments && orsResult.segments.length > 0) {
+        rawSegments = orsResult.segments;
+        routeGeometry = orsResult.geometry;
+        usedAPIs.push('OpenRouteService Directions API');
+      } else {
+        rawSegments = this.heuristicDecompose(startLocation, endLocation, departureTime);
+        routeGeometry = [{ lat: startLocation.lat, lng: startLocation.lng }, { lat: endLocation.lat, lng: endLocation.lng }];
+      }
     }
 
     // ── 2. Real walk durations (ORS foot-walking matrix) ─────────────────
@@ -857,19 +1087,22 @@ class GhostCommuteService {
       }
     }
 
-    // ── 3. Real train data (Indian Railways API) ─────────────────────────
-    if (hasKey('IRCTC_API_KEY')) {
+    // ── 3. Real train data (Indian Railways API / RailRadar API) ─────────
+    if (hasRailRadarKey() || hasIRCTCKey()) {
       for (const seg of rawSegments) {
         if (seg.type === 'local_train') {
           const trainData = await this.fetchTrainData(seg.from, seg.to);
           if (trainData) {
             seg.historicalDelayMin = trainData.delayMin;
             if (trainData.durationMin) {
-               seg.baseDurationMin = trainData.durationMin;
+              seg.baseDurationMin = trainData.durationMin;
             }
             seg.dataSource = 'real';
-            if (!usedAPIs.includes('Indian Railways API (RapidAPI)')) {
-               usedAPIs.push('Indian Railways API (RapidAPI)');
+
+            if (trainData.source === 'railradar' && !usedAPIs.includes('RailRadar API')) {
+              usedAPIs.push('RailRadar API');
+            } else if (trainData.source === 'irctc' && !usedAPIs.includes('Indian Railways API (RapidAPI)')) {
+              usedAPIs.push('Indian Railways API (RapidAPI)');
             }
           }
         }
@@ -989,6 +1222,7 @@ class GhostCommuteService {
       overallRisk,
       overallSafetyScore,
       weather,
+      routeGeometry: routeGeometry || [{ lat: startLocation.lat, lng: startLocation.lng }, { lat: endLocation.lat, lng: endLocation.lng }],
       dataSources: usedAPIs.length ? usedAPIs : ['heuristic (no API keys configured)'],
       summary: this.buildSummary(totalMin, avgConf, overallRisk, startLocation, endLocation),
     };
