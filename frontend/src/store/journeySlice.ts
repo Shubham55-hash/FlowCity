@@ -1,14 +1,27 @@
 import { configureStore, createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
-import { getRouteCoordinates } from '../utils/stationCoordinates';
 
-interface Location {
-  name: string;
-  lat: number;
-  lng: number;
+export interface TimelinePoint {
+  timeIso: string;
+  label: string;
+  isRisk: boolean;
+  errorBarMin: number;
+  errorBarMax: number;
 }
 
-interface Route {
+export interface RouteSegment {
+  mode: string;
+  duration: number;
+  instructions: string;
+  confidence?: number;
+  waitTimeMin?: number;
+  crowdLevel?: string;
+  connectionRisk?: string;
+  fromLatLng?: { lat: number; lng: number };
+  toLatLng?: { lat: number; lng: number };
+}
+
+export interface Route {
   id: string;
   mode: string;
   from: string;
@@ -19,23 +32,125 @@ interface Route {
   cost: number;
   safetyRating: number;
   summary: string;
-  segments: { mode: string; duration: number; instructions: string }[];
+  segments: RouteSegment[];
   fromCoords?: { lat: number; lng: number };
   toCoords?: { lat: number; lng: number };
   routeGeometry?: Array<{ lat: number; lng: number }>;
   dataSources?: string[];
+  journeyTimeline?: TimelinePoint[];
+  departureTimeIso?: string;
 }
 
+const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+function mapLegType(t: string): string {
+  switch (t) {
+    case 'walk':
+      return 'Walk';
+    case 'local_train':
+      return 'Train';
+    case 'metro':
+      return 'Metro';
+    case 'bus':
+      return 'Bus';
+    case 'cab':
+      return 'Cab';
+    case 'auto':
+      return 'Auto';
+    default:
+      return 'Transit';
+  }
+}
+
+function routeFromSimulation(
+  id: string,
+  from: string,
+  to: string,
+  trustScore: number,
+  status: Route['status'],
+  eta: number,
+  cost: number,
+  summary: string,
+  simulation: Record<string, unknown>
+): Route {
+  const segmentsRaw = simulation.segments as Record<string, unknown>[] | undefined;
+  const routeGeometry = simulation.routeGeometry as Route['routeGeometry'];
+  const journeyTimeline = simulation.journeyTimeline as TimelinePoint[] | undefined;
+  const dataSources = simulation.dataSources as string[] | undefined;
+
+  const segments: RouteSegment[] = (segmentsRaw || []).map((s) => ({
+    mode: mapLegType(String(s.type)),
+    duration: Number(s.predictedDurationMin) || 0,
+    instructions: `${s.from} → ${s.to}`,
+    confidence: typeof s.confidence === 'number' ? s.confidence : undefined,
+    waitTimeMin: typeof s.waitTimeMin === 'number' ? s.waitTimeMin : undefined,
+    crowdLevel: typeof s.crowdLevel === 'string' ? s.crowdLevel : undefined,
+    connectionRisk: typeof s.connectionRisk === 'string' ? s.connectionRisk : undefined,
+    fromLatLng:
+      s.fromLatLng && typeof s.fromLatLng === 'object'
+        ? (s.fromLatLng as { lat: number; lng: number })
+        : undefined,
+    toLatLng:
+      s.toLatLng && typeof s.toLatLng === 'object' ? (s.toLatLng as { lat: number; lng: number }) : undefined,
+  }));
+
+  const geom = routeGeometry?.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)) ?? [];
+  const fromCoords = geom[0];
+  const toCoords = geom.length > 1 ? geom[geom.length - 1] : undefined;
+
+  return {
+    id,
+    mode: mapLegType(String(segmentsRaw?.[0]?.type ?? 'metro')),
+    from,
+    to,
+    trustScore,
+    status,
+    eta,
+    cost,
+    safetyRating: trustScore,
+    summary,
+    segments,
+    fromCoords,
+    toCoords,
+    routeGeometry: geom.length ? geom : undefined,
+    dataSources,
+    journeyTimeline,
+  };
+}
+
+/** Build a Redux Route from a full ghost / rescue simulation payload */
+export function mapSimulationToRoute(
+  simulation: Record<string, unknown>,
+  routeId: string,
+  from: string,
+  to: string
+): Route {
+  const trustScore = Number(simulation.overallSafetyScore ?? 80);
+  const risk = String(simulation.overallRisk ?? 'Low');
+  const status: Route['status'] =
+    risk === 'Low' ? 'Safe' : risk === 'Medium' ? 'Moderate' : 'Risky';
+  return routeFromSimulation(
+    routeId,
+    from,
+    to,
+    trustScore,
+    status,
+    Number(simulation.totalTimeMin ?? 0),
+    Math.round(Number(simulation.totalPredictedCost ?? 0)),
+    String(simulation.summary ?? 'Route'),
+    simulation
+  );
+}
 
 interface JourneyState {
   results: Route[];
   selectedRoute: Route | null;
-  activeJourneyProgress: number; // 0-100 percentage
+  activeJourneyProgress: number;
   isSimulationRunning: boolean;
   loading: boolean;
   error: string | null;
   searchParams: { from: string; to: string; time: string; preference: string };
-  activeAlert: any | null;
+  activeAlert: unknown | null;
 }
 
 const initialState: JourneyState = {
@@ -46,34 +161,109 @@ const initialState: JourneyState = {
   loading: false,
   error: null,
   searchParams: { from: '', to: '', time: '', preference: 'Safety' },
-  activeAlert: null
+  activeAlert: null,
 };
+
+/** Fallback when the API is offline — keeps the UI usable */
+function mockRoutes(params: { from: string; to: string }): Route[] {
+  return [
+    {
+      id: 'R1',
+      mode: 'Metro',
+      from: params.from,
+      to: params.to,
+      trustScore: 92,
+      status: 'Safe',
+      eta: 32,
+      cost: 20,
+      safetyRating: 95,
+      summary: 'Offline preview — start backend for live simulation',
+      segments: [
+        { mode: 'Walk', duration: 5, instructions: 'Walk to station' },
+        { mode: 'Metro', duration: 27, instructions: 'Metro towards destination' },
+      ],
+    },
+  ];
+}
 
 export const fetchRoutes = createAsyncThunk(
   'journey/fetchRoutes',
-  async (params: any) => {
-    // MOCK: In production, call /api/journey/plan
-    await new Promise(res => setTimeout(res, 1000));
-    return [
-      {
-        id: 'R1', mode: 'Metro', from: params.from, to: params.to,
-        trustScore: 92, status: 'Safe', eta: 32, cost: 20, safetyRating: 95,
-        summary: 'Metro Line 1 + 5 min walk',
-        segments: [{ mode: 'Walk', duration: 5, instructions: 'Walk to Azad Nagar' }, { mode: 'Metro', duration: 27, instructions: 'Line 1 towards Ghatkopar' }]
-      },
-      {
-        id: 'R2', mode: 'Cab', from: params.from, to: params.to,
-        trustScore: 74, status: 'Moderate', eta: 45, cost: 250, safetyRating: 82,
-        summary: 'Direct Cab via Sea Link',
-        segments: [{ mode: 'Cab', duration: 45, instructions: 'Via Bandra-Worli Sea Link' }]
-      },
-      {
-        id: 'R3', mode: 'Bus', from: params.from, to: params.to,
-        trustScore: 55, status: 'Risky', eta: 70, cost: 15, safetyRating: 65,
-        summary: 'BEST Bus 202',
-        segments: [{ mode: 'Bus', duration: 70, instructions: 'Take 202 from Bus Depot' }]
+  async (params: { from: string; to: string; time: string; preference: string }, { rejectWithValue }) => {
+    const priority =
+      params.preference?.toLowerCase() === 'time'
+        ? 'time'
+        : params.preference?.toLowerCase() === 'cost'
+          ? 'cost'
+          : 'safety';
+
+    try {
+      const { data } = await axios.post<{ status: string; data?: Record<string, unknown>; message?: string }>(
+        `${apiBase()}/api/journey/plan`,
+        {
+          from: params.from.trim(),
+          to: params.to.trim(),
+          time: params.time || new Date().toISOString(),
+          preferences: { priority, avoidCrowds: false },
+        },
+        { timeout: 120_000 }
+      );
+
+      if (data.status !== 'success' || !data.data) {
+        return rejectWithValue(data.message || 'Plan failed');
       }
-    ] as Route[];
+
+      const d = data.data;
+      const sim = d.simulationDetails as Record<string, unknown> | undefined;
+      if (!sim) {
+        return rejectWithValue('Missing simulation details');
+      }
+
+      const statusVal = d.status as string;
+      const mappedStatus: Route['status'] =
+        statusVal === 'Safe' ? 'Safe' : statusVal === 'Moderate' ? 'Moderate' : 'Risky';
+
+      const primary = routeFromSimulation(
+        String(d.id),
+        String(d.from),
+        String(d.to),
+        Number(d.trustScore),
+        mappedStatus,
+        Number(d.eta),
+        Number(d.cost),
+        String(sim.summary || d.summary || 'Journey'),
+        sim
+      );
+      primary.departureTimeIso = params.time || new Date().toISOString();
+
+      const alts = (d.alternatives || []) as Record<string, unknown>[];
+      const altRoutes: Route[] = alts.map((alt) => ({
+        id: String(alt.id),
+        mode: 'Alt',
+        from: String(d.from),
+        to: String(d.to),
+        trustScore: Number(alt.trustScore),
+        status: Number(alt.trustScore) >= 75 ? 'Moderate' : 'Risky',
+        eta: Number(alt.eta),
+        cost: Number(alt.predictedCost),
+        safetyRating: Number(alt.trustScore),
+        summary: String(alt.mode),
+        segments: [
+          {
+            mode: 'Transit',
+            duration: Number(alt.eta),
+            instructions: String(alt.mode),
+          },
+        ],
+      }));
+
+      return [primary, ...altRoutes];
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err)
+        ? err.response?.data?.message || err.message
+        : 'Network error';
+      console.warn('Journey plan API error, using mock:', msg);
+      return mockRoutes(params);
+    }
   }
 );
 
@@ -92,35 +282,37 @@ const journeySlice = createSlice({
         state.activeJourneyProgress += 1;
       }
     },
-    switchActiveRoute: (state, action: PayloadAction<any>) => {
-      // action.payload can be a string (ID) or a full route object from rescue alert
+    resetSimulationProgress: (state) => {
+      state.activeJourneyProgress = 0;
+    },
+    switchActiveRoute: (state, action: PayloadAction<string | Route>) => {
       if (typeof action.payload === 'string') {
-        const newRoute = state.results.find(r => r.id === action.payload);
+        const newRoute = state.results.find((r) => r.id === action.payload);
         if (newRoute) {
           state.selectedRoute = newRoute;
         }
       } else {
-        // From Rescue Mode Option
         state.selectedRoute = action.payload;
       }
-      
-      // When switching due to rescue, we usually drop progress slightly to account for the new leg
       state.activeJourneyProgress = Math.max(0, Math.min(state.activeJourneyProgress, 85));
       state.activeAlert = null;
     },
-    updateSearchParams: (state, action: PayloadAction<any>) => {
+    updateSearchParams: (state, action: PayloadAction<Partial<JourneyState['searchParams']>>) => {
       state.searchParams = { ...state.searchParams, ...action.payload };
     },
-    setAlert: (state, action: PayloadAction<any>) => {
+    setAlert: (state, action: PayloadAction<unknown>) => {
       state.activeAlert = action.payload;
     },
     clearAlert: (state) => {
       state.activeAlert = null;
-    }
+    },
   },
   extraReducers: (builder) => {
     builder
-      .addCase(fetchRoutes.pending, (state) => { state.loading = true; })
+      .addCase(fetchRoutes.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
       .addCase(fetchRoutes.fulfilled, (state, action) => {
         state.loading = false;
         state.results = action.payload;
@@ -130,19 +322,27 @@ const journeySlice = createSlice({
           state.isSimulationRunning = true;
         }
       })
-      .addCase(fetchRoutes.rejected, (state) => {
+      .addCase(fetchRoutes.rejected, (state, action) => {
         state.loading = false;
-        state.error = 'Failed to fetch routes';
+        state.error = (action.payload as string) || 'Failed to fetch routes';
       });
-  }
+  },
 });
 
-export const { selectRoute, updateSearchParams, tickSimulation, switchActiveRoute, setAlert, clearAlert } = journeySlice.actions;
+export const {
+  selectRoute,
+  updateSearchParams,
+  tickSimulation,
+  resetSimulationProgress,
+  switchActiveRoute,
+  setAlert,
+  clearAlert,
+} = journeySlice.actions;
 
 export const store = configureStore({
   reducer: {
-    journey: journeySlice.reducer
-  }
+    journey: journeySlice.reducer,
+  },
 });
 
 export type RootState = ReturnType<typeof store.getState>;

@@ -1,8 +1,8 @@
 
 import { Request, Response } from 'express';
-import { trustScoreService } from '../services/trustScoreService';
 import { geocoderService } from '../services/geocoderService';
 import { ghostCommuteService } from '../services/ghostCommuteService';
+import { rescueService } from '../services/rescueService';
 
 export class JourneyController {
   public static async plan(req: Request, res: Response) {
@@ -36,11 +36,15 @@ export class JourneyController {
         }
       );
 
-      // 3. Map to Journey Response
+      // 3. Register journey for Rescue Shield (socket room journey_<id> must match client)
+      const journeyId = `JRN-${Date.now()}`;
+      rescueService.monitorJourney(journeyId, 'citizen-demo', simulation);
+
+      // 4. Map to Journey Response
       res.status(201).json({
         status: 'success',
         data: {
-          id: `JRN-${Math.floor(Math.random() * 10000)}`,
+          id: journeyId,
           mode: simulation.segments[0]?.type || 'transit',
           from,
           to,

@@ -1,56 +1,68 @@
-
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { io } from 'socket.io-client';
-import { 
-  Clock, Zap, Shield, AlertTriangle, ChevronDown, 
-  MapPin, Info, ArrowUpRight, CheckCircle2,
-  Train, Car, Footprints, Bus, X, RefreshCw
+import {
+  Clock,
+  Zap,
+  Shield,
+  AlertTriangle,
+  ChevronDown,
+  Info,
+  ArrowUpRight,
+  CheckCircle2,
+  Train,
+  Car,
+  Footprints,
+  Bus,
+  ArrowLeft,
+  Sparkles,
 } from 'lucide-react';
-import { 
-  RootState, 
-  AppDispatch, 
-  tickSimulation, 
+import GhostRouteMap from './GhostRouteMap';
+import {
+  RootState,
+  AppDispatch,
+  tickSimulation,
+  resetSimulationProgress,
   switchActiveRoute,
-  setAlert,
-  clearAlert
 } from '../store/journeySlice';
 
-const GhostCommuteView: React.FC = () => {
-  const dispatch = useDispatch<AppDispatch>();
-  const { 
-    selectedRoute, 
-    results, 
-    activeJourneyProgress, 
-    isSimulationRunning,
-    activeAlert 
-  } = useSelector((state: RootState) => state.journey);
+const socketBase = () => import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
-  // Socket.io Connection
+function formatClock(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return iso;
+  }
+}
+
+type GhostCommuteViewProps = {
+  onBack?: () => void;
+};
+
+const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
+  const dispatch = useDispatch<AppDispatch>();
+  const { selectedRoute, results, activeJourneyProgress, isSimulationRunning, activeAlert } = useSelector(
+    (state: RootState) => state.journey
+  );
+
+  const [expandedSeg, setExpandedSeg] = useState<number | null>(null);
+
   useEffect(() => {
     if (!selectedRoute?.id) return;
 
-    const socket = io('http://localhost:5000');
-    
+    const socket = io(socketBase());
+
     socket.emit('join_journey', selectedRoute.id);
-    console.log(`🔌 Connected to socket for journey: ${selectedRoute.id}`);
 
-    socket.on('RES_MODE_ALERT', (alert) => {
-      console.log('🚨 Rescue Alert Received:', alert);
-      dispatch(setAlert(alert));
-    });
-
-    socket.on('PLAN_UPDATED', (data) => {
-       console.log('✅ Plan Update Confirmed:', data);
-    });
+    socket.on('PLAN_UPDATED', () => {});
 
     return () => {
       socket.disconnect();
     };
   }, [selectedRoute?.id, dispatch]);
 
-  // Simulation Ticker
   useEffect(() => {
     if (isSimulationRunning && activeJourneyProgress < 100 && !activeAlert) {
       const timer = setInterval(() => dispatch(tickSimulation()), 1000);
@@ -61,300 +73,348 @@ const GhostCommuteView: React.FC = () => {
   const timelineData = useMemo(() => {
     if (!selectedRoute) return [];
     let currentTime = 0;
-    return selectedRoute.segments.map(seg => {
+    return selectedRoute.segments.map((seg) => {
       const start = currentTime;
       currentTime += seg.duration;
       return { ...seg, start, end: currentTime };
     });
   }, [selectedRoute]);
 
-  const totalTime = selectedRoute?.eta || 60;
-  const alternatives = results.filter(r => r.id !== selectedRoute?.id).slice(0, 2);
+  const totalTime = useMemo(() => {
+    if (!selectedRoute?.segments.length) return selectedRoute?.eta || 60;
+    const sum = selectedRoute.segments.reduce((a, s) => a + s.duration, 0);
+    return Math.max(sum, selectedRoute.eta || 1);
+  }, [selectedRoute]);
+
+  const pctAt = useCallback(
+    (minutes: number) => (totalTime > 0 ? (minutes / totalTime) * 100 : 0),
+    [totalTime]
+  );
+
+  const trustRef = selectedRoute?.trustScore ?? 80;
+
+  const bandPathD = useMemo(() => {
+    if (!timelineData.length) return '';
+    const upper: string[] = [];
+    const lower: Array<{ x: number; y: number }> = [];
+    timelineData.forEach((seg, i) => {
+      const xEnd = pctAt(seg.end);
+      const w = Math.min(6, 1.25 + (100 - (seg.confidence ?? trustRef)) / 22);
+      if (i === 0) upper.push(`M 0,${40 - w}`);
+      upper.push(`L ${xEnd},${40 - w}`);
+      lower.push({ x: xEnd, y: 40 + w });
+    });
+    const w0 = Math.min(6, 1.25 + (100 - (timelineData[0].confidence ?? trustRef)) / 22);
+    const last = lower[lower.length - 1];
+    const lowerBack = [...lower]
+      .slice(0, -1)
+      .reverse()
+      .map((p) => `L ${p.x},${p.y}`)
+      .join(' ');
+    return `${upper.join(' ')} L ${last.x},${last.y} ${lowerBack} L 0,${40 + w0} Z`;
+  }, [timelineData, pctAt, trustRef]);
+
+  const tickLabels = useMemo(() => {
+    const n = 5;
+    return Array.from({ length: n }, (_, i) => {
+      const m = Math.round((totalTime * i) / (n - 1));
+      return { m, pct: (i / (n - 1)) * 100 };
+    });
+  }, [totalTime]);
+
+  const alternatives = results.filter((r) => r.id !== selectedRoute?.id).slice(0, 2);
 
   const getStatusColor = (progress: number, start: number, end: number) => {
-    if (progress >= (end / totalTime) * 100) return 'bg-secondary shadow-[0_0_12px_#13FF43]';
-    if (progress >= (start / totalTime) * 100) return 'bg-primary animate-pulse shadow-[0_0_15px_#ffbf00]';
+    if (progress >= pctAt(end)) return 'bg-secondary shadow-[0_0_12px_#13FF43]';
+    if (progress >= pctAt(start)) return 'bg-primary animate-pulse shadow-[0_0_15px_#ffbf00]';
     return 'bg-white/10';
-  };
-
-  const handleRescueSwitch = (option: any) => {
-    // Map the backend option.route to the frontend Route type
-    const mappedRoute = {
-        id: option.id,
-        mode: 'Multi-Modal',
-        from: selectedRoute?.from || '',
-        to: selectedRoute?.to || '',
-        trustScore: option.safetyScore,
-        status: option.safetyScore > 80 ? 'Safe' : 'Moderate',
-        eta: option.route.totalTimeMin,
-        cost: option.costDiff > 0 ? 300 : 20,
-        safetyRating: option.safetyScore,
-        summary: option.label,
-        segments: option.route.segments.map((s: any) => ({
-            mode: s.type === 'walk' ? 'Walk' : s.type === 'local_train' ? 'Train' : 'Car',
-            duration: s.predictedDurationMin,
-            instructions: `${s.from} to ${s.to}`
-        }))
-    };
-    dispatch(switchActiveRoute(mappedRoute));
   };
 
   if (!selectedRoute) return null;
 
+  const timelinePoints = selectedRoute.journeyTimeline;
+
   return (
-    <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-10 min-h-screen relative">
-      {/* Rescue Alert Overlay */}
-      <AnimatePresence>
-        {activeAlert && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+    <div className="mx-auto w-full max-w-[1320px] px-4 pb-28 pt-4 md:px-8 md:pt-2 lg:pb-12">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={() => {
+            dispatch(resetSimulationProgress());
+            onBack?.();
+          }}
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold uppercase tracking-widest text-white/70 transition-colors hover:border-primary/40 hover:text-primary"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to flow
+        </button>
+        <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-secondary/90">
+          <Sparkles className="h-3.5 w-3.5" />
+          Ghost commute · Timeline + map
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[1fr_minmax(340px,420px)] xl:items-start">
+        <div className="space-y-8">
+          <motion.div
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-card relative overflow-hidden rounded-3xl border-2 border-primary/20 p-6 md:p-8 amber-glow"
           >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-surface-bright/90 border-2 border-red-500/50 rounded-[2.5rem] p-8 max-w-2xl w-full shadow-2xl relative overflow-hidden"
-            >
-              <div className="absolute top-0 left-0 w-full h-1 bg-red-500/20">
-                 <motion.div 
-                    initial={{ width: "100%" }}
-                    animate={{ width: "0%" }}
-                    transition={{ duration: 60, ease: "linear" }}
-                    className="h-full bg-red-500"
-                 />
-              </div>
-
-              <div className="flex justify-between items-start mb-8">
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-red-500/20 flex items-center justify-center border border-red-500/30">
-                    <AlertTriangle className="w-8 h-8 text-red-500 animate-pulse" />
-                  </div>
-                  <div>
-                    <h2 className="text-3xl font-black font-headline uppercase tracking-tighter text-red-500">Rescue Mode Engaged</h2>
-                    <p className="text-white/60 text-sm font-medium">{activeAlert.disruption.description}</p>
-                  </div>
+            <div className="relative z-10 flex flex-col justify-between gap-6 md:flex-row md:items-center">
+              <div className="min-w-0 flex-1">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.3em] text-secondary">
+                    <CheckCircle2 className="h-3 w-3" /> Live simulation
+                  </span>
+                  {selectedRoute.dataSources?.slice(0, 3).map((src) => (
+                    <span
+                      key={src}
+                      className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-semibold text-white/50"
+                    >
+                      {src.includes('Google') ? 'Maps' : src.includes('OpenRoute') ? 'ORS' : src.replace(/ API.*/, '')}
+                    </span>
+                  ))}
                 </div>
-                <button 
-                    onClick={() => dispatch(clearAlert())}
-                    className="p-2 hover:bg-white/5 rounded-full transition-colors"
-                >
-                    <X className="w-6 h-6 text-white/20" />
-                </button>
+                <h2 className="font-headline text-2xl font-black uppercase leading-tight tracking-tighter md:text-4xl">
+                  {selectedRoute.summary}
+                </h2>
+                <p className="mt-2 text-sm text-white/45">
+                  {selectedRoute.from} → {selectedRoute.to} · ~{selectedRoute.eta} min · ₹{selectedRoute.cost}
+                </p>
               </div>
+              <div className="text-left md:text-right">
+                <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/30">
+                  Progress
+                </span>
+                <span className="font-headline text-4xl font-black text-primary">{activeJourneyProgress}%</span>
+              </div>
+            </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                {activeAlert.options.map((opt: any) => (
-                  <motion.div 
-                    key={opt.id}
-                    whileHover={{ scale: 1.02 }}
-                    className={`p-6 rounded-3xl border-2 transition-all cursor-pointer ${opt.rank === 1 ? 'border-primary bg-primary/5' : 'border-white/5 bg-white/5'}`}
-                    onClick={() => handleRescueSwitch(opt)}
-                  >
-                    <div className="flex flex-col h-full justify-between">
-                      <div>
-                        <span className="block text-[10px] font-black uppercase tracking-widest text-white/30 mb-2">Option 0{opt.rank}</span>
-                        <h3 className="font-headline font-black text-xl mb-1 leading-tight">{opt.label}</h3>
-                        <p className="text-[10px] text-white/40 font-bold uppercase tracking-widest">
-                           {opt.timeImpactMin > 0 ? `+${opt.timeImpactMin}min` : `${opt.timeImpactMin}min`} vs Current
-                        </p>
-                      </div>
-                      
-                      <div className="mt-6 space-y-2">
-                        <div className="flex justify-between text-[9px] uppercase font-black">
-                           <span className="text-white/40">Reliability</span>
-                           <span className={opt.safetyScore > 80 ? 'text-secondary' : 'text-primary'}>{opt.safetyScore}%</span>
-                        </div>
-                        <div className="flex justify-between text-[9px] uppercase font-black">
-                           <span className="text-white/40">Est. Cost</span>
-                           <span className="text-secondary">₹{Math.round(opt.totalPredictedCost)}</span>
-                        </div>
-                        <div className="flex justify-between text-[7px] uppercase font-black">
-                           <span className={opt.costDiff < 0 ? 'text-secondary' : 'text-primary/60'}>
-                             {opt.costDiff > 0 ? `+₹${Math.round(opt.costDiff)} hike` : `₹${Math.abs(Math.round(opt.costDiff))} saved`}
-                           </span>
-                        </div>
-                      </div>
-                      
-                      <button className="w-full mt-6 py-3 bg-white/5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary hover:text-surface transition-all">
-                        Select Path
-                      </button>
+            <div className="relative z-10 mt-10 pb-6">
+              <p className="mb-3 text-[10px] font-black uppercase tracking-[0.35em] text-white/35">
+                Confidence band (by leg)
+              </p>
+              <svg className="h-28 w-full overflow-visible" viewBox="0 0 100 56" preserveAspectRatio="none">
+                {bandPathD && (
+                  <path d={bandPathD} className="fill-primary/10 stroke-none" vectorEffect="non-scaling-stroke" />
+                )}
+                <line x1="0" y1="40" x2="100" y2="40" stroke="rgba(255,255,255,0.08)" strokeWidth="0.35" strokeLinecap="round" />
+                <motion.line
+                  x1="0"
+                  y1="40"
+                  x2={activeJourneyProgress}
+                  y2="40"
+                  className="stroke-primary"
+                  strokeWidth="0.45"
+                  strokeLinecap="round"
+                  style={{ filter: 'drop-shadow(0 0 3px rgba(255,191,0,0.5))' }}
+                />
+                {timelineData.map((seg, i) => (
+                  <g key={i}>
+                    <circle
+                      cx={pctAt(seg.end)}
+                      cy={40}
+                      r={1.1}
+                      className={
+                        activeJourneyProgress >= pctAt(seg.end)
+                          ? 'fill-secondary stroke-white/30'
+                          : 'fill-[#393939] stroke-white/20'
+                      }
+                      strokeWidth="0.25"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                ))}
+                <g transform={`translate(${activeJourneyProgress}, 40)`}>
+                  <circle r={2.2} cy={0} className="fill-primary/35 blur-sm" />
+                  <circle r={1.2} cy={0} className="fill-[#131313] stroke-primary" strokeWidth="0.35" />
+                </g>
+              </svg>
+              <div className="mt-2 flex justify-between px-0.5">
+                {tickLabels.map(({ m, pct }) => (
+                  <span key={pct} className="text-[10px] font-bold uppercase tracking-widest text-white/30">
+                    {m}m
+                  </span>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+
+          {timelinePoints && timelinePoints.length > 0 && (
+            <div className="glass-card rounded-3xl border border-white/10 p-6 md:p-8">
+              <h3 className="mb-6 flex items-center gap-2 font-headline text-xs font-black uppercase tracking-[0.4em] text-white/40">
+                <Clock className="h-4 w-4 text-primary" />
+                Prediction timeline
+              </h3>
+              <ul className="relative space-y-0 border-l border-white/10 pl-6 md:pl-8">
+                {timelinePoints.map((pt, idx) => (
+                  <li key={`${pt.timeIso}-${idx}`} className="relative pb-8 last:pb-0">
+                    <span
+                      className={`absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 md:-left-[6px] ${
+                        pt.isRisk ? 'border-amber-400 bg-amber-500/40' : 'border-primary/50 bg-surface'
+                      }`}
+                    />
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <span className="font-headline text-sm font-bold text-white/90">{pt.label}</span>
+                      <span className="font-mono text-xs text-primary/90">{formatClock(pt.timeIso)}</span>
                     </div>
-                  </motion.div>
+                    {(pt.errorBarMin !== 0 || pt.errorBarMax !== 0) && (
+                      <p className="mt-1 text-[11px] text-white/35">
+                        Uncertainty −{Math.abs(pt.errorBarMin)} / +{pt.errorBarMax} min
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="space-y-4">
+              <h3 className="flex items-center gap-2 px-1 font-headline text-xs font-black uppercase tracking-[0.4em] text-white/30">
+                <Zap className="h-4 w-4 fill-primary text-primary" />
+                Multi-leg breakdown
+              </h3>
+              {timelineData.map((seg, i) => (
+                <motion.div
+                  key={i}
+                  layout
+                  className="glass-card group flex cursor-pointer items-center justify-between rounded-2xl border border-white/5 p-4 transition-all hover:border-primary/25 hover:bg-surface-bright/20"
+                  onClick={() => setExpandedSeg(expandedSeg === i ? null : i)}
+                >
+                  <div className="flex min-w-0 items-center gap-4">
+                    <div
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all ${getStatusColor(
+                        activeJourneyProgress,
+                        seg.start,
+                        seg.end
+                      )}`}
+                    >
+                      {seg.mode === 'Metro' ? (
+                        <Train className="h-5 w-5 text-surface" />
+                      ) : seg.mode === 'Wait' ? (
+                        <Clock className="h-5 w-5 text-surface" />
+                      ) : seg.mode === 'Walk' ? (
+                        <Footprints className="h-5 w-5 text-surface" />
+                      ) : seg.mode === 'Train' ? (
+                        <Train className="h-5 w-5 text-surface" />
+                      ) : seg.mode === 'Bus' ? (
+                        <Bus className="h-5 w-5 text-surface" />
+                      ) : (
+                        <Car className="h-5 w-5 text-surface" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-headline text-sm font-bold tracking-tight">{seg.instructions}</p>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-white/40">
+                        {seg.duration} min · {seg.mode}
+                        {seg.confidence != null ? ` · ${seg.confidence}% conf` : ''}
+                        {seg.waitTimeMin ? ` · ${seg.waitTimeMin}m wait` : ''}
+                      </span>
+                      {expandedSeg === i && (seg.crowdLevel || seg.connectionRisk) && (
+                        <p className="mt-2 text-xs leading-relaxed text-white/45">
+                          {seg.crowdLevel ? `Crowd: ${seg.crowdLevel}. ` : ''}
+                          {seg.connectionRisk ? `Connection risk: ${seg.connectionRisk}.` : ''}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`h-4 w-4 shrink-0 text-white/15 transition-transform group-hover:text-primary ${
+                      expandedSeg === i ? 'rotate-180' : ''
+                    }`}
+                  />
+                </motion.div>
+              ))}
+            </div>
+
+            <div className="space-y-4">
+              <h3 className="flex items-center gap-2 px-1 font-headline text-xs font-black uppercase tracking-[0.4em] text-red-400/60">
+                <Shield className="h-4 w-4 fill-red-500 text-red-500" />
+                Alternatives
+              </h3>
+              <div className="space-y-3">
+                {alternatives.map((alt) => (
+                  <div
+                    key={alt.id}
+                    className="glass-card group rounded-2xl border-2 border-white/5 p-5 transition-all hover:border-primary/40"
+                  >
+                    <div className="mb-4 flex justify-between gap-4">
+                      <div className="min-w-0">
+                        <span className="block font-headline text-lg font-black">{alt.summary}</span>
+                        <span className="text-xs text-white/40">
+                          Journey{' '}
+                          <span
+                            className={
+                              alt.eta < selectedRoute.eta ? 'font-bold text-secondary' : 'text-white/60'
+                            }
+                          >
+                            {alt.eta} min
+                          </span>
+                        </span>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <span className="block font-headline text-lg font-black text-primary">₹ {alt.cost}</span>
+                        {alt.eta > selectedRoute.eta && (
+                          <div className="mt-1 flex items-center justify-end gap-1 text-[9px] font-black uppercase tracking-tighter text-amber-400/90">
+                            <AlertTriangle className="h-3 w-3" />
+                            +{alt.eta - selectedRoute.eta} min vs current
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => dispatch(switchActiveRoute(alt.id))}
+                      className="w-full rounded-xl bg-white/5 py-3 font-headline text-[10px] font-black uppercase tracking-[0.2em] transition-all group-hover:bg-primary group-hover:text-surface"
+                    >
+                      Reroute
+                    </button>
+                  </div>
                 ))}
               </div>
 
-              <p className="text-center text-[10px] font-black uppercase tracking-[0.3em] text-white/20">
-                Automatic fallback in 60s • Decision required immediately
-              </p>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Simulation Master Header */}
-      <motion.div 
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="glass-card p-6 rounded-3xl border-2 border-primary/20 relative overflow-hidden amber-glow"
-      >
-        <div className="flex justify-between items-center relative z-10">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-               <span className="flex items-center gap-1.5 text-secondary text-[10px] font-black uppercase tracking-[0.3em]">
-                 <CheckCircle2 className="w-3 h-3" /> Live Simulation Active
-               </span>
-            </div>
-            <h2 className="font-headline text-4xl font-black tracking-tight uppercase tracking-tighter">
-              {selectedRoute.summary}
-            </h2>
-          </div>
-          <div className="text-right">
-             <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest block">Flow Progress</span>
-             <span className="text-3xl font-black text-primary">{activeJourneyProgress}%</span>
-          </div>
-        </div>
-
-        {/* Timeline Visualization System */}
-        <div className="mt-12 relative pb-10">
-          <svg className="w-full h-24 overflow-visible">
-            {/* Uncertainty Band (±σ) */}
-            <path
-              d={`M 0,40 
-                  ${timelineData.map(seg => `L ${(seg.end / totalTime) * 100}%,${35 + (seg.trustScore || 10) / 10}`).join(' ')} 
-                  ${timelineData.reverse().map(seg => `L ${(seg.end / totalTime) * 100}%,${45 - (seg.trustScore || 10) / 10}`).join(' ')} Z`}
-              className="fill-primary/5 stroke-none blur-sm"
-              style={{ filter: 'drop-shadow(0 0 8px rgba(255,191,0,0.1))' }}
-            />
-            
-            {/* Base Timeline Track */}
-            <line x1="0" y1="40" x2="100%" y2="40" stroke="rgba(255,255,255,0.05)" strokeWidth="4" strokeLinecap="round" />
-            
-            {/* Progress Fill */}
-            <motion.line 
-              x1="0" y1="40" 
-              x2={`${activeJourneyProgress}%`} 
-              y2="40" 
-              className="stroke-primary shadow-glow" 
-              strokeWidth="4" 
-              strokeLinecap="round" 
-            />
-
-            {/* Segment Junctions & Markers */}
-            {timelineData.map((seg, i) => (
-              <g key={i}>
-                <circle 
-                  cx={`${(seg.end / totalTime) * 100}%`} 
-                  cy="40" 
-                  r="6" 
-                  className={activeJourneyProgress >= (seg.end / totalTime) * 100 ? 'fill-secondary' : 'fill-surface-bright stroke-white/20'}
-                  strokeWidth="2"
-                />
-                {seg.duration > 15 && (
-                  <text 
-                    x={`${(seg.start / totalTime + seg.duration / (2 * totalTime)) * 100}%`} 
-                    y="65" 
-                    textAnchor="middle" 
-                    className="fill-white/20 text-[8px] font-black uppercase tracking-widest"
-                  >
-                    {seg.mode}
-                  </text>
-                )}
-              </g>
-            ))}
-
-            {/* Progress Head */}
-            <motion.g animate={{ x: `${activeJourneyProgress}%` }}>
-               <circle r="12" cy="40" className="fill-primary animate-pulse blur-md opacity-40" />
-               <circle r="6" cy="40" className="fill-surface stroke-primary" strokeWidth="3" />
-            </motion.g>
-          </svg>
-
-          {/* Time axis text */}
-          <div className="flex justify-between mt-2 px-1">
-             <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest">0m</span>
-             <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest">30m</span>
-             <span className="text-[10px] font-bold text-white/30 uppercase tracking-widest">{totalTime}m</span>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Segment Intensity & Details */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="space-y-4">
-          <h3 className="font-headline text-xs font-black uppercase tracking-[0.4em] text-white/30 px-2 flex items-center gap-2">
-            <Zap className="w-4 h-4 text-primary fill-primary" /> Multi-Leg Breakdown
-          </h3>
-          {timelineData.map((seg, i) => (
-            <motion.div 
-              key={i}
-              className="glass-card p-4 rounded-2xl flex items-center justify-between border border-white/5 hover:bg-surface-bright/20 transition-all cursor-pointer group"
-            >
-              <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${getStatusColor(activeJourneyProgress, seg.start, seg.end)}`}>
-                   {seg.mode === 'Metro' ? <Train className="w-5 h-5 text-surface" /> : seg.mode === 'Wait' ? <Clock className="w-5 h-5 text-surface" /> : seg.mode === 'Walk' ? <Footprints className="w-5 h-5 text-surface" /> : seg.mode === 'Train' ? <Train className="w-5 h-5 text-surface" /> : seg.mode === 'Bus' ? <Bus className="w-5 h-5 text-surface" /> : <Car className="w-5 h-5 text-surface" />}
-                </div>
-                <div>
-                   <p className="font-headline font-bold text-sm tracking-tight">{seg.instructions}</p>
-                   <span className="text-[10px] text-white/40 uppercase font-black tracking-widest">{seg.duration} min • {seg.mode}</span>
-                </div>
-              </div>
-              <ChevronDown className="w-4 h-4 text-white/10 group-hover:text-primary" />
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Alternatives & Disruption Status */}
-        <div className="space-y-4">
-           <h3 className="font-headline text-xs font-black uppercase tracking-[0.4em] text-red-400/60 px-2 flex items-center gap-2">
-            <Shield className="w-4 h-4 text-red-500 fill-red-500" /> Active Rescue Shield
-          </h3>
-          <div className="space-y-3">
-            {alternatives.map((alt) => (
-              <div 
-                key={alt.id}
-                className="glass-card p-5 rounded-2xl border-2 border-white/5 hover:border-primary/40 transition-all group"
+              <motion.div
+                animate={{ opacity: [0.55, 1, 0.55] }}
+                transition={{ duration: 4, repeat: Infinity }}
+                className="relative mt-4 overflow-hidden rounded-3xl border border-red-500/20 bg-red-500/10 p-5"
               >
-                <div className="flex justify-between mb-4">
-                   <div>
-                     <span className="block text-lg font-headline font-black">{alt.summary}</span>
-                     <span className="text-xs text-white/40">Sync impact: <span className={alt.eta < selectedRoute.eta ? 'text-secondary font-bold' : 'text-white/60'}>{alt.eta} min journey</span></span>
-                   </div>
-                   <div className="text-right">
-                      <span className="block text-lg font-headline font-black text-primary">₹ {alt.cost}</span>
-                      <div className="flex items-center gap-1 text-[9px] text-white/20 uppercase font-black tracking-tighter">
-                        <AlertTriangle className="w-3 h-3 text-red-500" /> High Reliability
-                      </div>
-                   </div>
+                <div className="relative z-10 flex items-start gap-4">
+                  <Shield className="h-6 w-6 shrink-0 text-red-500" />
+                  <div>
+                    <span className="mb-1 block font-headline text-xs font-black uppercase tracking-widest text-red-500">
+                      Rescue protocol
+                    </span>
+                    <p className="text-xs font-medium leading-relaxed text-red-200/60">
+                      Monitoring for real-time disruptions. Rescue mode can engage when delay spikes are detected.
+                    </p>
+                  </div>
                 </div>
-                <button 
-                  onClick={() => dispatch(switchActiveRoute(alt.id))}
-                  className="w-full bg-white/5 group-hover:bg-primary group-hover:text-surface font-headline font-black text-[10px] uppercase py-3 rounded-xl transition-all tracking-[0.2em]"
-                >
-                  Reroute Option
-                </button>
-              </div>
-            ))}
+                <div className="absolute right-0 top-0 h-24 w-24 rounded-full bg-red-500/5 blur-3xl" />
+              </motion.div>
+            </div>
           </div>
-
-          <motion.div 
-            animate={{ opacity: [0.5, 1, 0.5] }}
-            transition={{ duration: 4, repeat: Infinity }}
-            className="bg-red-500/10 border border-red-500/20 p-5 rounded-3xl mt-6 relative overflow-hidden"
-          >
-             <div className="flex items-start gap-4 relative z-10">
-                <Shield className="w-6 h-6 text-red-500 shrink-0" />
-                <div>
-                   <span className="block text-red-500 font-headline font-black text-xs uppercase tracking-widest mb-1">Rescue Protocol Active</span>
-                   <p className="text-xs text-red-200/60 leading-relaxed font-medium">
-                     Monitoring your flow for real-time disruptions. Rescue Mode will engage automatically if a delay spike is detected.
-                   </p>
-                </div>
-             </div>
-             <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 blur-3xl rounded-full" />
-          </motion.div>
         </div>
+
+        <aside className="flex flex-col gap-4 xl:sticky xl:top-28">
+          <div className="glass-card rounded-3xl border border-white/10 p-4">
+            <h3 className="mb-3 flex items-center gap-2 font-headline text-xs font-black uppercase tracking-[0.3em] text-white/40">
+              <ArrowUpRight className="h-4 w-4 text-primary" />
+              Route on map
+            </h3>
+            <GhostRouteMap
+              path={selectedRoute.routeGeometry ?? []}
+              fromLabel={selectedRoute.from}
+              toLabel={selectedRoute.to}
+            />
+            <p className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-white/40">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary/60" />
+              Uses your browser key (<code className="text-white/55">VITE_GOOGLE_MAPS_API_KEY</code>). Enable Maps JavaScript API +
+              billing in Google Cloud.
+            </p>
+          </div>
+        </aside>
       </div>
     </div>
   );

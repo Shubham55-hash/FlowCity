@@ -98,9 +98,13 @@ class SafetyService {
     const hour = new Date().getHours();
     const isPeak = (hour >= 8 && hour <= 11) || (hour >= 17 && hour <= 21);
     
-    // Base scores
-    let crowd = isPeak ? 65 + Math.random() * 20 : 20 + Math.random() * 30;
-    let safety = 85 + Math.random() * 10;
+    // Location-stable variation (same cell + hour → same score; no Math.random flicker)
+    const seed = Math.sin(lat * 12.9898 + lng * 78.233 + hour) * 43758.5453;
+    const frac = seed - Math.floor(seed);
+    const wobble = (n: number) => frac * n;
+
+    let crowd = isPeak ? 65 + wobble(20) : 20 + wobble(30);
+    let safety = 78 + wobble(18);
 
     // Adjust based on nearby reports
     const nearbyReports = this.reports.filter(r => 

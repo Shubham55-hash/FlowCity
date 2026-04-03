@@ -3,43 +3,18 @@ import { motion, AnimatePresence } from "motion/react";
 import { useDispatch, useSelector } from "react-redux";
 import { io, Socket } from "socket.io-client";
 import { 
-  EyeOff, LifeBuoy, ShieldCheck, History, Zap, 
-  Bell, User, Clock, GitBranch, 
-  CloudSun, ChevronRight, AlertTriangle, CheckCircle2, Map
+  EyeOff, LifeBuoy, History, Zap, 
+  Bell, Clock, GitBranch, Map
 } from "lucide-react";
 import JourneyPlanner from "./components/JourneyPlanner";
 import GhostCommuteView from "./components/GhostCommuteView";
 import CommuteReplayDashboard from "./components/CommuteReplayDashboard";
 import RouteHeatmap from "./components/RouteHeatmap";
-import { RootState, AppDispatch } from "./store/journeySlice";
+import RescueShieldView from "./components/RescueShieldView";
+import RescueAlertOverlay from "./components/RescueAlertOverlay";
+import { RootState, AppDispatch, setAlert } from "./store/journeySlice";
 
-type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'safety-map' | 'plan' | 'history' | 'heatmap';
-
-const TrustScore = ({ score }: { score: number }) => {
-  const radius = 110;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
-
-  return (
-    <div className="relative flex items-center justify-center w-64 h-64">
-      <svg className="absolute inset-0 w-full h-full -rotate-90">
-        <circle className="text-white/5" cx="128" cy="128" fill="transparent" r={radius} stroke="currentColor" strokeWidth="4" />
-        <motion.circle
-          initial={{ strokeDashoffset: circumference }}
-          animate={{ strokeDashoffset: offset }}
-          transition={{ duration: 1.5, ease: "easeOut" }}
-          className="drop-shadow-[0_0_12px_#ffbf0088]"
-          cx="128" cy="128" fill="transparent" r={radius} stroke="#FFBF00" strokeDasharray={circumference} strokeLinecap="round" strokeWidth="12"
-        />
-      </svg>
-      <div className="text-center">
-        <motion.span initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }} className="block font-headline text-7xl font-black text-primary tracking-tighter">{score}</motion.span>
-        <span className="block font-headline text-xs uppercase tracking-[0.3em] text-white/40">TrustScore</span>
-      </div>
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 w-2 h-2 bg-secondary rounded-full animate-pulse shadow-[0_0_8px_#13FF43]" />
-    </div>
-  );
-};
+type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'plan' | 'history' | 'heatmap';
 
 const ActionTile = ({ icon: Icon, title, subtitle, active = false, onClick }: any) => (
   <motion.div 
@@ -72,11 +47,26 @@ const ActionTile = ({ icon: Icon, title, subtitle, active = false, onClick }: an
   </motion.div>
 );
 
-const FlowView = ({ score, selectedRoute, onGhostClick, onSafetyMapClick, onRescueClick, onHistoryClick, onHeatmapClick }: any) => (
+const FlowView = ({ selectedRoute, onGhostClick, onRescueClick, onHistoryClick, onHeatmapClick }: any) => (
   <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
     <section className="flex flex-col items-center justify-center pt-4">
-      <TrustScore score={selectedRoute?.trustScore || score} />
-      <p className="mt-4 text-center text-white/60 font-medium text-sm max-w-[240px]">Your kinetic flow is optimized for peak efficiency tonight.</p>
+      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-white/5 px-8 py-6 text-center backdrop-blur-sm">
+        <p className="font-headline text-[10px] font-black uppercase tracking-[0.35em] text-white/35">Next commute</p>
+        {selectedRoute ? (
+          <>
+            <p className="mt-2 font-headline text-4xl font-black tracking-tight text-primary">{selectedRoute.eta} min</p>
+            <p className="mt-1 text-sm font-medium text-white/55">{selectedRoute.summary}</p>
+            <p className="mt-2 text-[11px] text-white/40">
+              ₹{selectedRoute.cost} · {selectedRoute.from} → {selectedRoute.to}
+            </p>
+          </>
+        ) : (
+          <p className="mt-3 text-sm text-white/55">Plan a route to unlock simulation, replay, and heatmaps.</p>
+        )}
+      </div>
+      <p className="mt-4 max-w-[280px] text-center text-sm font-medium text-white/50">
+        Commute Replay saves your trip history and surfaces personalized suggestions from it.
+      </p>
     </section>
 
     <section>
@@ -109,18 +99,9 @@ const FlowView = ({ score, selectedRoute, onGhostClick, onSafetyMapClick, onResc
     <section className="grid grid-cols-2 gap-4 pb-8">
       <ActionTile icon={EyeOff} title="Ghost Commute" subtitle="Stimulate Flow" onClick={onGhostClick} active={!!selectedRoute} />
       <ActionTile icon={LifeBuoy} title="Rescue Shield" subtitle="Smart Backup" onClick={onRescueClick} />
-      <ActionTile icon={ShieldCheck} title="Safety Map" subtitle="Secure Zones" onClick={onSafetyMapClick} />
+      <ActionTile icon={History} title="Commute Replay" subtitle="History & tips" onClick={onHistoryClick} />
       <ActionTile icon={Map} title="Route Heatmap" subtitle="Traffic View" onClick={onHeatmapClick} />
     </section>
-  </motion.div>
-);
-
-const AlertsView = () => (
-  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-    <h2 className="font-headline text-3xl font-bold tracking-tight mb-8 uppercase tracking-tighter">City Pulse</h2>
-    <div className="bg-surface-container rounded-2xl p-6 border border-white/5">
-      <p className="text-sm text-white/60 leading-relaxed font-medium">Humidity levels rising in Lower Parel. Transit visibility remains optimal.</p>
-    </div>
   </motion.div>
 );
 
@@ -129,7 +110,6 @@ export default function App() {
   const { selectedRoute, results: allRoutes } = useSelector((state: RootState) => state.journey);
   
   const [view, setView] = useState<View>('flow');
-  const [score] = useState<number>(88);
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
@@ -138,6 +118,23 @@ export default function App() {
     socketRef.current = socket;
     return () => { socket.disconnect(); };
   }, []);
+
+  useEffect(() => {
+    const s = socketRef.current;
+    if (!s) return;
+    const jid = selectedRoute?.id;
+    const join = () => {
+      if (jid) s.emit("join_journey", jid);
+    };
+    join();
+    s.on("connect", join);
+    const onRescue = (payload: unknown) => dispatch(setAlert(payload));
+    s.on("RES_MODE_ALERT", onRescue);
+    return () => {
+      s.off("connect", join);
+      s.off("RES_MODE_ALERT", onRescue);
+    };
+  }, [selectedRoute?.id, dispatch]);
 
   const handleStartSimulation = () => {
     if (selectedRoute) {
@@ -148,16 +145,29 @@ export default function App() {
   };
 
   const NavButton = ({ active, onClick, icon: Icon, label, isMain = false }: any) => (
-    <button onClick={onClick} className={`flex flex-col items-center gap-1 transition-all ${active ? 'text-primary' : 'text-white/70'}`}>
-      <div className={`${isMain ? 'bg-primary text-surface p-3 rounded-full shadow-[0_0_25px_#ffbf0088] mb-1' : ''}`}>
-        <Icon size={isMain ? 26 : 22} />
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full flex-col items-center gap-1 transition-all lg:flex-row lg:items-center lg:justify-start lg:gap-3 lg:rounded-2xl lg:px-3 lg:py-2.5 lg:hover:bg-white/5 ${
+        active ? 'text-primary lg:bg-primary/10' : 'text-white/70'
+      }`}
+    >
+      <div
+        className={`flex shrink-0 items-center justify-center ${
+          isMain
+            ? 'mb-1 rounded-full bg-primary p-3 text-surface shadow-[0_0_25px_#ffbf0088] lg:mb-0 lg:p-2.5'
+            : 'lg:rounded-lg lg:bg-white/5 lg:p-2'
+        }`}
+      >
+        <Icon size={isMain ? 26 : 22} className="lg:h-[22px] lg:w-[22px]" />
       </div>
-      <span className="text-[10px] font-black uppercase tracking-widest leading-none">{label}</span>
+      <span className="text-[10px] font-black uppercase leading-none tracking-widest lg:text-xs">{label}</span>
     </button>
   );
 
   return (
     <div className="min-h-screen font-sans text-white overflow-x-hidden selection:bg-primary/30 relative">
+      <RescueAlertOverlay />
       <div className="fixed inset-0 -z-10 bg-surface" />
       <div className="fixed inset-0 -z-10 opacity-30 pointer-events-none grayscale contrast-125">
         <img className="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD8DHc3I2QiURDjUJHdCXDERSUaGwNroZWuw1yNm2pjEMoUgiXa9CuOR5H-1bGOciXmqudM9HkVKxLT5wQiEENIHTx-AIcVfiBZBv2bRGweDN8WWauj5QJbJayYEwwfsPx4_gFn-ORqFT2EQz0Z1tmjGTlzMbd7NrKiE5weBNqNAkxjHdMkLqeTUohT5fcGPt9SIk2bqLJyi884t8H0vPtPkQA20dOYIWyknQrHoxL2BmJPPZnWYVCHgsUnDQtBb0l85rPJbAfMHD8" alt="BG" />
@@ -174,34 +184,40 @@ export default function App() {
         </div>
       </header>
 
-      <main className="relative z-10 pt-28 pb-48 px-4 md:px-8 max-w-lg md:max-w-4xl mx-auto w-full">
+      <main className="relative z-10 mx-auto w-full max-w-lg px-4 pb-40 pt-24 md:max-w-3xl md:px-8 md:pb-28 md:pt-28 lg:ml-52 lg:mr-auto lg:max-w-[1180px] lg:px-10 xl:max-w-[1280px]">
         <AnimatePresence mode="wait">
           {view === 'flow' && (
             <FlowView 
               key="flow"
-              score={score} 
               selectedRoute={selectedRoute} 
               onGhostClick={handleStartSimulation} 
-              onSafetyMapClick={() => setView('safety-map')}
               onRescueClick={() => setView('alerts')}
               onHistoryClick={() => setView('history')}
               onHeatmapClick={() => setView('heatmap')}
             />
           )}
-          {view === 'ghost' && <GhostCommuteView key="ghost" />}
-          {view === 'safety-map' && <div className="py-20 text-center uppercase tracking-widest text-white/20">Safety Grid Analysis Active</div>}
+          {view === 'ghost' && (
+            <GhostCommuteView key="ghost" onBack={() => setView('flow')} />
+          )}
           {view === 'plan' && <JourneyPlanner key="plan" onNavigate={() => setView('flow')} />}
           {view === 'history' && <CommuteReplayDashboard key="history" />}
-          {view === 'alerts' && <AlertsView key="alerts" />}
-          {view === 'heatmap' && <RouteHeatmap key="heatmap" routes={allRoutes && allRoutes.length > 0 ? allRoutes : selectedRoute ? [selectedRoute] : []} selectedRoute={selectedRoute} />}
+          {view === 'alerts' && <RescueShieldView key="alerts" />}
+          {view === 'heatmap' && (
+            <div key="heatmap" className="w-full">
+              <RouteHeatmap routes={allRoutes && allRoutes.length > 0 ? allRoutes : selectedRoute ? [selectedRoute] : []} selectedRoute={selectedRoute} />
+            </div>
+          )}
         </AnimatePresence>
       </main>
 
-      <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex justify-around items-center p-3.5 bg-surface/60 backdrop-blur-3xl rounded-full w-[90%] max-w-md border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+      <nav
+        className="fixed bottom-8 left-1/2 z-50 flex w-[90%] max-w-md -translate-x-1/2 items-center justify-around rounded-full border border-white/10 bg-surface/60 p-3.5 shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-3xl lg:bottom-auto lg:left-6 lg:top-28 lg:h-auto lg:max-h-none lg:w-48 lg:translate-x-0 lg:flex-col lg:items-stretch lg:gap-1 lg:rounded-3xl lg:p-3"
+        aria-label="Primary"
+      >
         <NavButton active={view === 'flow'} onClick={() => setView('flow')} icon={Zap} label="Flow" isMain />
         <NavButton active={view === 'plan'} onClick={() => setView('plan')} icon={GitBranch} label="Plan" />
         <NavButton active={view === 'alerts'} onClick={() => setView('alerts')} icon={Bell} label="Alerts" />
-        <NavButton active={view === 'history'} onClick={() => setView('history')} icon={History} label="Audit" />
+        <NavButton active={view === 'history'} onClick={() => setView('history')} icon={History} label="Replay" />
       </nav>
     </div>
   );

@@ -12,6 +12,52 @@ class RescueService {
   private activeJourneys: Map<string, ActiveJourney> = new Map();
   private monitorIntervals: Map<string, NodeJS.Timeout> = new Map();
 
+  public isMonitoring(journeyId: string): boolean {
+    return this.activeJourneys.has(journeyId);
+  }
+
+  /**
+   * Live backup routes for Rescue Shield UI (time / safety / cost optima).
+   */
+  public async previewShieldRoutes(
+    start: Location,
+    end: Location,
+    departureTime: Date
+  ): Promise<RerouteOption[]> {
+    const priorities: ('time' | 'safety' | 'cost')[] = ['time', 'safety', 'cost'];
+    const labels = ['Time-saver', 'Safe path', 'Economy choice'];
+    const options: RerouteOption[] = [];
+    let baselineTime = 0;
+    let baselineCost = 0;
+
+    for (let i = 0; i < priorities.length; i++) {
+      const priority = priorities[i];
+      try {
+        const result = await ghostCommuteService.simulateJourney(start, end, departureTime, {
+          priority,
+        });
+        if (i === 0) {
+          baselineTime = result.totalTimeMin;
+          baselineCost = result.totalPredictedCost;
+        }
+        options.push({
+          id: `shield-${priority}-${Date.now()}-${i}`,
+          label: labels[i],
+          route: result,
+          timeImpactMin: Math.round(result.totalTimeMin - baselineTime),
+          totalPredictedCost: result.totalPredictedCost,
+          costDiff: Math.round(result.totalPredictedCost - baselineCost),
+          safetyScore: result.overallSafetyScore,
+          rank: i + 1,
+        });
+      } catch (err) {
+        console.error(`previewShieldRoutes failed for ${priority}:`, err);
+      }
+    }
+
+    return options;
+  }
+
   /**
    * Monitor a journey for real-time disruptions
    */
@@ -176,7 +222,7 @@ class RescueService {
         );
 
         options.push({
-          id: `rescue-${priority}-${Date.now()}`,
+          id: `rescue-${priority}-${Date.now()}-${i}`,
           label: priority === 'time' ? 'Time-Saver (Express)' : priority === 'safety' ? 'Safe Path' : 'Economy Choice',
           route: result,
           timeImpactMin: result.totalTimeMin - (journey.originalPlan.totalTimeMin - currentSeg.predictedDurationMin), 
@@ -188,7 +234,7 @@ class RescueService {
       } catch (err) {
         // Fallback for demo if API fails
         options.push({
-          id: `fallback-${priority}-${Date.now()}`,
+          id: `fallback-${priority}-${Date.now()}-${i}`,
           label: `Backup ${priority}`,
           route: { ...journey.originalPlan, totalTimeMin: journey.originalPlan.totalTimeMin + (i * 10), totalPredictedCost: 200 + (i * 50) } as any,
           timeImpactMin: i * 10,
@@ -228,10 +274,12 @@ class RescueService {
   /**
    * For Development: Manually trigger a disruption alert
    */
-  public debugTrigger(journeyId: string) {
+  public debugTrigger(journeyId: string): boolean {
     const journey = this.activeJourneys.get(journeyId);
-    if (!journey) return;
-    
+    if (!journey) return false;
+
+    journey.status = 'on_track';
+
     const disruption: DisruptionInfo = {
       journeyId,
       type: 'transit_delay',
@@ -241,7 +289,8 @@ class RescueService {
       severity: 'Medium'
     };
 
-    this.handleDisruption(journey, disruption);
+    void this.handleDisruption(journey, disruption);
+    return true;
   }
 }
 

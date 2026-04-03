@@ -9,6 +9,12 @@ interface RouteHeatmapProps {
   selectedRoute?: any;
 }
 
+function trafficLoadLabel(trustScore: number): string {
+  if (trustScore > 70) return 'Light';
+  if (trustScore > 50) return 'Moderate';
+  return 'Heavy';
+}
+
 const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -110,7 +116,7 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
       const fromCoords = route.fromCoords || { lat: 19.076, lng: 72.8776 };
       const toCoords = route.toCoords || { lat: 19.2183, lng: 72.9781 };
       
-      const safetyColor = route.trustScore > 70 ? "#22c55e" : route.trustScore > 50 ? "#eab308" : "#ef4444";
+      const routeLineColor = route.trustScore > 70 ? "#22c55e" : route.trustScore > 50 ? "#eab308" : "#ef4444";
       
       // From marker
       L.circleMarker([fromCoords.lat, fromCoords.lng], {
@@ -129,7 +135,7 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
         route.routeGeometry && route.routeGeometry.length > 1
           ? route.routeGeometry.map((pt: any) => [pt.lat, pt.lng])
           : route.segments && route.segments.length > 0
-            ? route.segments.reduce<Array<[number, number]>>((points, seg: any) => {
+            ? route.segments.reduce((points: Array<[number, number]>, seg: any) => {
                 if (seg.fromLatLng && points.length === 0) {
                   points.push([seg.fromLatLng.lat, seg.fromLatLng.lng]);
                 }
@@ -137,11 +143,11 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
                   points.push([seg.toLatLng.lat, seg.toLatLng.lng]);
                 }
                 return points;
-              }, [])
+              }, [] as Array<[number, number]>)
             : [[fromCoords.lat, fromCoords.lng], [toCoords.lat, toCoords.lng]];
 
       L.polyline(routeLinePath, {
-        color: safetyColor,
+        color: routeLineColor,
         weight: 3,
         opacity: 0.8,
         dashArray: selectedRoute?.id === route.id ? "0" : "5,5",
@@ -150,7 +156,7 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
           `<div class="text-xs">
             <strong>${route.from} → ${route.to}</strong><br/>
             ETA: ${route.eta} min | Cost: ₹${route.cost}<br/>
-            Safety: ${route.trustScore}/100
+            Traffic load: ${trafficLoadLabel(route.trustScore)}
           </div>`
         )
         .addTo(map);
@@ -158,8 +164,8 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
       // To marker
       L.circleMarker([toCoords.lat, toCoords.lng], {
         radius: 8,
-        fillColor: safetyColor,
-        color: safetyColor,
+        fillColor: routeLineColor,
+        color: routeLineColor,
         weight: 2,
         opacity: 1,
         fillOpacity: 0.8,
@@ -253,15 +259,15 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
                       <p className="text-xs font-bold text-primary">{route.eta} min</p>
                       <p className="text-[10px] text-white/40">₹{route.cost}</p>
                     </div>
-                    <div
-                      className="w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm"
+                    <span
+                      className="rounded-lg border border-white/10 px-2.5 py-1.5 text-[10px] font-black uppercase tracking-tighter"
                       style={{
                         backgroundColor:
                           route.trustScore > 70
-                            ? "rgba(34, 197, 94, 0.2)"
+                            ? "rgba(34, 197, 94, 0.15)"
                             : route.trustScore > 50
-                              ? "rgba(234, 179, 8, 0.2)"
-                              : "rgba(239, 68, 68, 0.2)",
+                              ? "rgba(234, 179, 8, 0.15)"
+                              : "rgba(239, 68, 68, 0.15)",
                         color:
                           route.trustScore > 70
                             ? "#22c55e"
@@ -270,8 +276,8 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
                               : "#ef4444",
                       }}
                     >
-                      {route.trustScore}
-                    </div>
+                      {trafficLoadLabel(route.trustScore)} traffic
+                    </span>
                   </div>
                 </div>
               </div>

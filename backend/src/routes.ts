@@ -38,9 +38,10 @@ router.get('/history/stats', commuteReplayController.getStats);
 router.get('/history/insights', commuteReplayController.getRecommendations);
 router.get('/history/replay/:id', commuteReplayController.getReplay);
 
-// ── RESCUE MODE ROUTES ───────────────────────────────────────────────────────
-router.post('/rescue/alternatives', authenticate as any, RescueController.getAlternatives);
-router.post('/rescue/:journeyId/switch', authenticate as any, RescueController.switchRoute);
+// ── RESCUE MODE ROUTES (open for local demo; protect in production) ──────────
+router.post('/rescue/alternatives', RescueController.getAlternatives);
+router.post('/rescue/switch', RescueController.switchRoute);
+router.post('/rescue/trigger-test', RescueController.triggerTest);
 
 // ── ROUTES DISCOVERY ─────────────────────────────────────────────────────────
 router.get('/routes/all', RouteController.getAll);

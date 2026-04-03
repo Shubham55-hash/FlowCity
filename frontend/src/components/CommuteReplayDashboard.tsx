@@ -23,6 +23,8 @@ interface Recommendation {
   impact: string;
 }
 
+const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 const CommuteReplayDashboard: React.FC = () => {
   const [stats, setStats] = useState<Stats | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -31,12 +33,14 @@ const CommuteReplayDashboard: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        const base = apiBase();
         const [statsRes, recsRes] = await Promise.all([
-          axios.get('http://localhost:5000/api/history/stats'),
-          axios.get('http://localhost:5000/api/history/insights')
+          axios.get(`${base}/api/history/stats`),
+          axios.get(`${base}/api/history/insights`)
         ]);
         setStats(statsRes.data);
-        setRecommendations(recsRes.data);
+        const recs = recsRes.data;
+        setRecommendations(Array.isArray(recs) ? recs : []);
       } catch (err) {
         console.error('Failed to fetch dashboard intelligence:', err);
       } finally {
@@ -62,8 +66,8 @@ const CommuteReplayDashboard: React.FC = () => {
       {/* Header & Export */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
-           <h2 className="font-headline text-4xl font-black tracking-tight uppercase tracking-tighter">Commute Audit</h2>
-           <p className="text-white/40 text-sm font-medium">90-Day kinetic flow performance report.</p>
+           <h2 className="font-headline text-4xl font-black tracking-tight uppercase tracking-tighter">Commute Replay</h2>
+           <p className="text-white/40 text-sm font-medium">Saved trip history over ~90 days, with tailored suggestions from your patterns.</p>
         </div>
         <button className="bg-primary text-surface font-headline font-black px-6 py-3 rounded-2xl flex items-center gap-3 transition-all hover:scale-[1.02] shadow-[0_0_30px_rgba(255,191,0,0.3)]">
            <Download className="w-5 h-5" /> EXPORT PDF REPORT
@@ -143,7 +147,7 @@ const CommuteReplayDashboard: React.FC = () => {
            
            <div className="space-y-3">
               <h4 className="text-[10px] font-black tracking-widest text-white/20 uppercase px-2">Identified Performance Patterns</h4>
-              {stats?.patterns.map((p, i) => (
+              {(stats?.patterns ?? []).map((p, i) => (
                  <div key={i} className="flex items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/5">
                     <Info className="w-5 h-5 text-primary shrink-0" />
                     <p className="text-sm text-white/60 font-medium">{p}</p>
@@ -188,7 +192,7 @@ const CommuteReplayDashboard: React.FC = () => {
                  </div>
               </div>
               <p className="text-xs text-white/40 leading-relaxed">
-                 Your kinetic scoring has improved by <span className="text-primary font-bold">14%</span> compared to the average Mumbai commuter this month.
+                 Replay highlights where you gained time this month versus earlier commutes—open recommendations to act on the biggest wins.
               </p>
            </div>
         </div>

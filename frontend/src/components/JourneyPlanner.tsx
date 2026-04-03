@@ -5,10 +5,12 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, MapPin, Calendar, Clock, ChevronRight, 
-  Shield, Zap, Leaf, AlertTriangle, Play,
+  Zap, Leaf, AlertTriangle, Play,
   Train, Car, Info
 } from 'lucide-react';
 import { RootState, AppDispatch, fetchRoutes, selectRoute, updateSearchParams } from '../store/journeySlice';
+
+const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) => {
   const dispatch = useDispatch<AppDispatch>();
@@ -27,7 +29,7 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
     }
 
     try {
-      const res = await axios.get('http://localhost:5000/api/geocode/autocomplete', { params: { q: trimmed } });
+      const res = await axios.get(`${apiBase()}/api/geocode/autocomplete`, { params: { q: trimmed } });
       const suggestions = (res.data?.data?.suggestions || []).slice(0, 8);
       if (type === 'from') setFromSuggestions(suggestions); else setToSuggestions(suggestions);
     } catch (err) {
@@ -48,18 +50,6 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
 
   const handleSearch = () => {
     dispatch(fetchRoutes(searchParams));
-  };
-
-  const getScoreColor = (score: number) => {
-    if (score >= 80) return 'text-secondary border-secondary/20 bg-secondary/10';
-    if (score >= 60) return 'text-yellow-400 border-yellow-400/20 bg-yellow-400/10';
-    return 'text-red-500 border-red-500/20 bg-red-500/10';
-  };
-
-  const getScoreGlow = (score: number) => {
-    if (score >= 80) return 'shadow-[0_0_20px_rgba(19,255,67,0.2)]';
-    if (score >= 60) return 'shadow-[0_0_20px_rgba(250,204,21,0.2)]';
-    return 'shadow-[0_0_20px_rgba(239,68,68,0.2)]';
   };
 
   return (
@@ -201,7 +191,7 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
           disabled={loading}
           className="w-full mt-6 bg-primary hover:bg-yellow-400 text-surface font-headline font-bold py-4 rounded-2xl flex items-center justify-center gap-3 transition-all active:scale-[0.98] disabled:opacity-50"
         >
-          {loading ? 'CALCULATING TRUST...' : 'FIND OPTIMAL ROUTES'}
+          {loading ? 'CALCULATING ROUTES...' : 'FIND OPTIMAL ROUTES'}
           {!loading && <ChevronRight className="w-5 h-5" />}
         </button>
       </motion.div>
@@ -232,7 +222,6 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                     <div className="flex items-center gap-4 text-sm text-white/40 font-medium">
                       <span className="flex items-center gap-1"><Clock className="w-4 h-4" /> {route.eta} min</span>
                       <span className="flex items-center gap-1">₹ {route.cost}</span>
-                      <span className="flex items-center gap-1 text-secondary"><Shield className="w-4 h-4" /> {route.safetyRating}% Solid</span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
                       {route.dataSources?.map((source) => (
@@ -242,11 +231,6 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                       ))}
                     </div>
                   </div>
-                </div>
-
-                <div className={`w-16 h-16 rounded-full border-2 flex flex-col items-center justify-center ${getScoreColor(route.trustScore)} ${getScoreGlow(route.trustScore)}`}>
-                  <span className="text-xl font-bold leading-none">{route.trustScore}</span>
-                  <span className="text-[8px] font-black uppercase tracking-tighter">TRUST</span>
                 </div>
               </div>
 
