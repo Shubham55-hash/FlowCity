@@ -1,0 +1,7 @@
+{
+  "from": "Bandra",
+  "to": "Churchgate",
+  "preferences": {
+    "priority": "safety"
+  }
+}

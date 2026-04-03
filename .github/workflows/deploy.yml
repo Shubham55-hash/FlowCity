@@ -1,0 +1,333 @@
+name: FlowCity CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, staging, develop]
+  pull_request:
+    branches: [main, staging]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_BACKEND_REPO: flowcity/backend
+  ECR_FRONTEND_REPO: flowcity/frontend
+  NODE_VERSION: "20"
+
+# ─── Concurrency: cancel in-progress runs on same branch ─────────────────────
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 1. LINT & TYPE CHECK
+  # ═══════════════════════════════════════════════════════════════════════════
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install Backend Deps
+        run: npm ci
+        working-directory: backend
+
+      - name: TypeCheck Backend
+        run: npx tsc --noEmit
+        working-directory: backend
+
+      - name: Install Frontend Deps
+        run: npm ci
+        working-directory: frontend
+
+      - name: TypeCheck Frontend
+        run: npm run lint
+        working-directory: frontend
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 2. UNIT TESTS
+  # ═══════════════════════════════════════════════════════════════════════════
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flowcity_test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: flowcity_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Deps
+        run: npm ci
+        working-directory: backend
+
+      - name: Run Tests
+        run: npm test -- --coverage --forceExit
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://flowcity_test:test_password@localhost:5432/flowcity_test
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          JWT_SECRET: test_jwt_secret_for_ci
+
+      - name: Upload Coverage
+        uses: codecov/codecov-action@v4
+        with:
+          directory: backend/coverage
+          flags: backend
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 3. BUILD & PUSH DOCKER IMAGES
+  # ═══════════════════════════════════════════════════════════════════════════
+  build:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push'
+    outputs:
+      backend_image: ${{ steps.meta-backend.outputs.tags }}
+      frontend_image: ${{ steps.meta-frontend.outputs.tags }}
+      image_tag: ${{ steps.vars.outputs.sha_short }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Backend ─────────────────────────────────────────────────────────
+      - name: Docker Meta (Backend)
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPO }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Frontend ────────────────────────────────────────────────────────
+      - name: Docker Meta (Frontend)
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_FRONTEND_REPO }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL }}
+            VITE_SOCKET_URL=${{ vars.VITE_SOCKET_URL }}
+            VITE_SENTRY_DSN=${{ secrets.VITE_SENTRY_DSN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 4. DEPLOY TO STAGING
+  # ═══════════════════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy → Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/staging'
+    environment:
+      name: staging
+      url: https://staging.flowcity.app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run DB Migrations (Staging)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ec2-user
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/flowcity
+            docker compose exec -T backend \
+              psql "$DATABASE_URL" -f /app/db/schema.sql --on-error-stop
+
+      - name: Deploy to EC2 (Staging)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ec2-user
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          envs: IMAGE_TAG
+          script: |
+            cd /opt/flowcity
+            echo "IMAGE_TAG=${{ needs.build.outputs.image_tag }}" >> .env
+            aws ecr get-login-password --region ap-south-1 | \
+              docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            docker compose pull backend frontend
+            docker compose up -d --remove-orphans
+            docker image prune -f
+
+      - name: Smoke Test
+        run: |
+          sleep 15
+          curl --fail https://staging.flowcity.app/api/health
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 5. DEPLOY TO PRODUCTION
+  # ═══════════════════════════════════════════════════════════════════════════
+  deploy-prod:
+    name: Deploy → Production
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://flowcity.app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run DB Migrations (Production)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ec2-user
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/flowcity
+            docker compose exec -T backend \
+              psql "$DATABASE_URL" -f /app/db/schema.sql --on-error-stop
+
+      - name: Blue/Green Deploy (Production)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ec2-user
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/flowcity
+            echo "IMAGE_TAG=${{ needs.build.outputs.image_tag }}" >> .env
+            aws ecr get-login-password --region ap-south-1 | \
+              docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            docker compose pull backend frontend
+            docker compose up -d --no-deps --scale backend=2 backend
+            sleep 20
+            docker compose up -d --no-deps backend frontend
+            docker image prune -f
+
+      - name: Production Health Check
+        run: |
+          sleep 20
+          curl --fail https://flowcity.app/api/health
+
+      - name: Notify Slack on Success
+        if: success()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {"text": "✅ FlowCity deployed to *production* — commit `${{ github.sha }}` by @${{ github.actor }}"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify Slack on Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {"text": "🚨 FlowCity production deploy *FAILED* — commit `${{ github.sha }}` — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

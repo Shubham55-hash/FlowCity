@@ -1,0 +1,15 @@
+﻿--- Testing API Keys ---
+OPENROUTE_API_KEY: Present
+IRCTC_API_KEY: Present
+IRCTC_API_HOST: Present
+IRCTC_API_BASE_URL: Present
+GEOAPIFY_API_KEY: Present
+UBER_TOKEN: Present
+OLA_KEY: Present
+Testing Geoapify... Γ£à Working
+Testing OpenRouteService... Γ£à Working
+Testing IRCTC (RapidAPI)... Γ¥î Failed: 404
+
+--- Transport Provider Tokens ---
+UBER_SERVER_TOKEN: Γ¥î MISSING (using heuristic)
+OLA_API_KEY: Γ¥î MISSING (using heuristic)
