@@ -1,31 +1,67 @@
 
 import { Request, Response } from 'express';
 import { trustScoreService } from '../services/trustScoreService';
+import { geocoderService } from '../services/geocoderService';
+import { ghostCommuteService } from '../services/ghostCommuteService';
 
 export class JourneyController {
   public static async plan(req: Request, res: Response) {
-    const { from, to, time, preferences } = req.body;
-    
-    // MOCK: Integration with Google Maps / IRCTC
-    const routeId = 'M-LINE-1';
-    const scoreData = await trustScoreService.getTrustScore(routeId, new Date(), 'USR-4829');
+    try {
+      const { from, to, preferences } = req.body;
+      const departureTime = req.body.time ? new Date(req.body.time) : new Date();
 
-    res.status(201).json({
-      status: 'success',
-      data: {
-        id: `JRN-${Math.floor(Math.random() * 10000)}`,
-        mode: 'Train',
-        from,
-        to,
-        trustScore: scoreData.trustScore,
-        status: scoreData.status,
-        eta: 35, // minutes
-        alternatives: [
-           { mode: 'Cab', eta: 45, trustScore: 88 },
-           { mode: 'Bus', eta: 55, trustScore: 92 }
-        ]
+      console.log(`Plan request: from=${from}, to=${to}`);
+
+      // 1. Resolve Geo-coordinates
+      const fromCoords = await geocoderService.geocode(from);
+      console.log(`From coords:`, fromCoords);
+      const toCoords = await geocoderService.geocode(to);
+      console.log(`To coords:`, toCoords);
+
+      if (!fromCoords || !toCoords) {
+        return res.status(400).json({
+          status: 'fail',
+          message: `Could not resolve locations: ${!fromCoords ? from : ''} ${!toCoords ? to : ''}`.trim()
+        });
       }
-    });
+
+      // 2. Run real-time simulation via Ghost Commute
+      const simulation = await ghostCommuteService.simulateJourney(
+        { name: from, lat: fromCoords.lat, lng: fromCoords.lng },
+        { name: to, lat: toCoords.lat, lng: toCoords.lng },
+        departureTime,
+        { 
+          priority: preferences?.priority?.toLowerCase() || 'safety',
+          avoidCrowds: preferences?.avoidCrowds || false
+        }
+      );
+
+      // 3. Map to Journey Response
+      res.status(201).json({
+        status: 'success',
+        data: {
+          id: `JRN-${Math.floor(Math.random() * 10000)}`,
+          mode: simulation.segments[0]?.type || 'transit',
+          from,
+          to,
+          trustScore: simulation.overallSafetyScore,
+          status: simulation.overallRisk === 'Low' ? 'Safe' : simulation.overallRisk === 'Medium' ? 'Moderate' : 'Risky',
+          eta: simulation.totalTimeMin,
+          cost: Math.round(simulation.totalPredictedCost),
+          alternatives: simulation.alternatives.map(alt => ({
+            id: alt.id,
+            mode: alt.label,
+            eta: alt.totalTimeMin,
+            trustScore: alt.safetyScore,
+            predictedCost: Math.round(alt.predictedCost)
+          })),
+          simulationDetails: simulation
+        }
+      });
+    } catch (error: any) {
+      console.error('Journey Planning Error:', error);
+      res.status(500).json({ status: 'error', message: error.message });
+    }
   }
 
   public static async getActive(req: Request, res: Response) {

@@ -54,38 +54,47 @@ class CommuteReplayService {
    * Extracts historical insights from the last 30-90 days for a specific user.
    */
   async extractInsights(userId: string): Promise<Insights> {
-    // 90-day aggregation window
-    const result = await pool.query(`
-      SELECT * FROM journeys 
-      WHERE user_id = $1 AND completed = TRUE
-      AND created_at > NOW() - INTERVAL '90 days'
-      ORDER BY created_at DESC
-      LIMIT 30
-    `, [userId]);
+    try {
+      // 90-day aggregation window
+      const result = await pool.query(`
+        SELECT * FROM journeys 
+        WHERE user_id = $1 AND completed = TRUE
+        AND created_at > NOW() - INTERVAL '90 days'
+        ORDER BY created_at DESC
+        LIMIT 30
+      `, [userId]);
 
-    const journeys = result.rows;
-    
-    if (journeys.length === 0) {
-       // Return realistic mock for first-time profile demo
-       return this.getMockInsights();
+      const journeys = result.rows;
+      
+      if (journeys.length === 0) {
+         // Return realistic mock for first-time profile demo
+         return this.getMockInsights();
+      }
+
+      const avgDelay = journeys.reduce((acc, j) => acc + (Math.max(0, j.actual_duration - j.predicted_duration)), 0) / journeys.length;
+      
+      // Pattern recognition (simplified)
+      const patterns = [];
+      if (avgDelay > 10) patterns.push('High congestion detected in current route choices.');
+      
+      return {
+        avgDelay: Math.round(avgDelay),
+        reliabilityByRoute: [
+          { route: 'Andheri → BKC', score: 92 },
+          { route: 'Bandra → Worli', score: 78 }
+        ],
+        peakHourAnalysis: Array.from({ length: 12 }, (_, i) => ({ hour: 8 + i, delay: Math.random() * 15 })),
+        patterns,
+        costTrend: journeys.map(j => ({ date: j.created_at.toISOString().split('T')[0], amount: Number(j.actual_duration * 0.5) })).reverse()
+      };
+    } catch (error: any) {
+      if (error.code === 'ECONNREFUSED' || error.name === 'AggregateError') {
+        console.info('ℹ️ [DEMO MODE] PostgreSQL not detected. Using localized mock data for commute insights.');
+      } else {
+        console.warn('Postgres error, falling back to mock:', error.message);
+      }
+      return this.getMockInsights();
     }
-
-    const avgDelay = journeys.reduce((acc, j) => acc + (Math.max(0, j.actual_duration - j.predicted_duration)), 0) / journeys.length;
-    
-    // Pattern recognition (simplified)
-    const patterns = [];
-    if (avgDelay > 10) patterns.push('High congestion detected in current route choices.');
-    
-    return {
-      avgDelay: Math.round(avgDelay),
-      reliabilityByRoute: [
-        { route: 'Andheri → BKC', score: 92 },
-        { route: 'Bandra → Worli', score: 78 }
-      ],
-      peakHourAnalysis: Array.from({ length: 12 }, (_, i) => ({ hour: 8 + i, delay: Math.random() * 15 })),
-      patterns,
-      costTrend: journeys.map(j => ({ date: j.created_at.toISOString().split('T')[0], amount: Number(j.actual_duration * 0.5) })).reverse()
-    };
   }
 
   /**

@@ -6,8 +6,7 @@ export interface Coordinates {
 }
 
 class GeocoderService {
-  private readonly apiKey = process.env.GEOAPIFY_API_KEY;
-  
+
   // Local registry for high-priority Mumbai locations to ensure 100% reliability
   private readonly localRegistry: Record<string, Coordinates> = {
     'borivali': { lat: 19.2291, lng: 72.8574 },
@@ -41,7 +40,8 @@ class GeocoderService {
     }
 
     // Try Geoapify API
-    if (!this.apiKey || this.apiKey === 'your_geoapify_key_here') {
+    const apiKey = process.env.GEOAPIFY_API_KEY;
+    if (!apiKey || apiKey === 'your_geoapify_key_here') {
       console.warn('Geoapify API key missing, falling back to null');
       return null;
     }
@@ -50,7 +50,7 @@ class GeocoderService {
       const response = await axios.get('https://api.geoapify.com/v1/geocode/search', {
         params: {
           text: `${name}, Mumbai, India`,
-          apiKey: this.apiKey,
+          apiKey: apiKey,
         },
         timeout: 3000,
       });

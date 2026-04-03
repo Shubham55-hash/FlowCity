@@ -16,6 +16,7 @@ export interface RerouteOption {
   label: string;
   route: SimulationResult;
   timeImpactMin: number; // difference from original
+  totalPredictedCost: number;
   costDiff: number;
   safetyScore: number;
   rank: number;

@@ -1,5 +1,5 @@
 import { safetyService } from './safetyService';
-import { dataIntegrationService } from './dataIntegrationService';
+import { dataIntegrationService, TransitInfo, WeatherInfo } from './dataIntegrationService';
 
 interface ScoreBreakdown {
   historicalPunctuality: number;
@@ -82,24 +82,33 @@ class TrustScoreService {
   }
 
   private async calculateRealTimeConditions(routeId: string): Promise<number> {
-    const baseDelay = routeId.includes('Bandra') ? 15 : 8;
-    return Math.max(0, 100 - ((baseDelay + Math.random() * 4) * 5));
+    const transit = dataIntegrationService.getCachedData<TransitInfo>(`transit:${routeId}`);
+    const delay = transit ? transit.delayMin : 5; // Default small delay if no data
+    
+    // Score drops 5 points for every minute of delay
+    const score = Math.max(0, 100 - (delay * 5));
+    return score;
   }
 
   private async calculateExternalFactors(routeId: string, time: Date): Promise<number> {
-    const weather = dataIntegrationService.getCachedData<any>('weather:mumbai');
+    const weather = dataIntegrationService.getCachedData<WeatherInfo>('weather:mumbai');
     const crowd = await dataIntegrationService.getCrowdData(routeId);
-    const events = await dataIntegrationService.getLocalEvents();
     
     let factor = 1.0;
-    if (weather?.isAdverse) factor *= 0.85;
+    if (weather?.isAdverse) {
+      factor *= 0.8; // Heavy impact for bad weather
+    } else if (weather && weather.temp > 35) {
+      factor *= 0.95; // Slight impact for extreme heat
+    }
+
     if (crowd.density > 80) factor *= 0.7;
-    events.forEach((e: any) => { if (e.impactScore > 7) factor *= 0.9; });
+    else if (crowd.density > 60) factor *= 0.85;
 
     let score = this.BASE_SCORE * factor;
 
     const isPeak = (time.getHours() >= 8 && time.getHours() <= 10) || (time.getHours() >= 18 && time.getHours() <= 21);
-    if (isPeak) score -= 10;
+    if (isPeak) score -= 15;
+    
     return Math.max(0, Math.min(100, score));
   }
 

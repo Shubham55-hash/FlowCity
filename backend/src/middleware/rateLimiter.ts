@@ -1,4 +1,4 @@
-import { RateLimitRequestHandler, rateLimit } from 'express-rate-limit';
+import { RateLimitRequestHandler, rateLimit, ipKeyGenerator } from 'express-rate-limit';
 import { AuthRequest } from '../types';
 
 /**
@@ -8,18 +8,15 @@ import { AuthRequest } from '../types';
  */
 export const apiRateLimiter: RateLimitRequestHandler = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: (req: any) => {
-    // If the request has been authenticated already, use user roles
-    const authReq = req as AuthRequest;
-    if (authReq.user?.role === 'premium' || authReq.user?.role === 'admin') {
-      return 1000;
-    }
-    return 100;
-  },
+  max: 100,
   keyGenerator: (req) => {
-    // Falls back to IP if user ID is missing
-    return (req as AuthRequest).user?.id || req.ip || 'global';
+    // Use authenticated user ID if available, otherwise use the
+    // ipKeyGenerator helper which safely handles IPv6 addresses.
+    const userId = (req as AuthRequest).user?.id;
+    if (userId) return userId;
+    return ipKeyGenerator(req.ip ?? '');
   },
+  validate: { trustProxy: false },
   message: {
     status: 429,
     error: 'Too many requests. Please try again after 1 minute.',

@@ -21,7 +21,7 @@ router.post('/auth/refresh', AuthController.refresh);
 router.post('/auth/logout', authenticate as any, AuthController.logout);
 
 // ── JOURNEY PLANNING ROUTES ──────────────────────────────────────────────────
-router.post('/journey/plan', authenticate as any, validate(schemas.journey.plan), JourneyController.plan);
+router.post('/journey/plan', validate(schemas.journey.plan), JourneyController.plan);
 router.get('/journey/:id', authenticate as any, JourneyController.getActive);
 router.post('/journey/:id/update', authenticate as any, JourneyController.updateStatus);
 
@@ -34,9 +34,9 @@ router.post('/ghost-commute/simulate', ghostCommuteController.simulate);
 router.get('/ghost-commute/:id', ghostCommuteController.getQuickSimulation);
 
 // ── HISTORY & ANALYTICS ──────────────────────────────────────────────────────
-router.get('/history/stats', authenticate as any, commuteReplayController.getStats);
-router.get('/history/insights', authenticate as any, commuteReplayController.getRecommendations);
-router.get('/history/replay/:id', authenticate as any, commuteReplayController.getReplay);
+router.get('/history/stats', commuteReplayController.getStats);
+router.get('/history/insights', commuteReplayController.getRecommendations);
+router.get('/history/replay/:id', commuteReplayController.getReplay);
 
 // ── RESCUE MODE ROUTES ───────────────────────────────────────────────────────
 router.post('/rescue/alternatives', authenticate as any, RescueController.getAlternatives);
