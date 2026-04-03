@@ -8,7 +8,6 @@ import {
   Shield,
   AlertTriangle,
   ChevronDown,
-  Info,
   ArrowUpRight,
   CheckCircle2,
   Train,
@@ -19,13 +18,38 @@ import {
   Sparkles,
 } from 'lucide-react';
 import GhostRouteMap from './GhostRouteMap';
+import { splitLegInstruction } from '../utils/formatLegInstructions';
 import {
   RootState,
   AppDispatch,
   tickSimulation,
   resetSimulationProgress,
   switchActiveRoute,
+  type Route,
 } from '../store/journeySlice';
+
+/** Prefer full geometry; else segment endpoints; else straight line from journey endpoints. */
+function resolveRoutePathForMap(route: Route): Array<{ lat: number; lng: number }> {
+  const geom = route.routeGeometry;
+  if (geom && geom.length >= 2) return geom;
+
+  const pts: Array<{ lat: number; lng: number }> = [];
+  for (const s of route.segments ?? []) {
+    if (s.fromLatLng) pts.push(s.fromLatLng);
+    if (s.toLatLng) pts.push(s.toLatLng);
+  }
+  const dedup: typeof pts = [];
+  for (const p of pts) {
+    const prev = dedup[dedup.length - 1];
+    if (!prev || prev.lat !== p.lat || prev.lng !== p.lng) dedup.push(p);
+  }
+  if (dedup.length >= 2) return dedup;
+
+  if (route.fromCoords && route.toCoords) {
+    return [route.fromCoords, route.toCoords];
+  }
+  return [];
+}
 
 const socketBase = () => import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -176,18 +200,18 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                     </span>
                   ))}
                 </div>
-                <h2 className="font-headline text-2xl font-black uppercase leading-tight tracking-tighter md:text-4xl">
+                <h2 className="font-headline text-base font-black uppercase leading-snug tracking-tight text-white/95 md:text-lg">
                   {selectedRoute.summary}
                 </h2>
-                <p className="mt-2 text-sm text-white/45">
-                  {selectedRoute.from} → {selectedRoute.to} · ~{selectedRoute.eta} min · ₹{selectedRoute.cost}
+                <p className="mt-2 text-sm tabular-nums text-white/45">
+                  ~{selectedRoute.eta} min · ₹{selectedRoute.cost}
                 </p>
               </div>
               <div className="text-left md:text-right">
                 <span className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-white/30">
                   Progress
                 </span>
-                <span className="font-headline text-4xl font-black text-primary">{activeJourneyProgress}%</span>
+                <span className="font-headline text-2xl font-black text-primary md:text-3xl">{activeJourneyProgress}%</span>
               </div>
             </div>
 
@@ -247,20 +271,21 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                 <Clock className="h-4 w-4 text-primary" />
                 Prediction timeline
               </h3>
-              <ul className="relative space-y-0 border-l border-white/10 pl-6 md:pl-8">
+              <ul className="relative space-y-0 border-l border-white/10 pl-10 md:pl-12">
                 {timelinePoints.map((pt, idx) => (
                   <li key={`${pt.timeIso}-${idx}`} className="relative pb-8 last:pb-0">
                     <span
-                      className={`absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 md:-left-[6px] ${
+                      className={`absolute -left-[5px] top-1.5 h-2.5 w-2.5 shrink-0 rounded-full border-2 md:-left-[6px] ${
                         pt.isRisk ? 'border-amber-400 bg-amber-500/40' : 'border-primary/50 bg-surface'
                       }`}
+                      aria-hidden
                     />
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <div className="flex flex-wrap items-baseline justify-between gap-3 pl-1 md:pl-2">
                       <span className="font-headline text-sm font-bold text-white/90">{pt.label}</span>
                       <span className="font-mono text-xs text-primary/90">{formatClock(pt.timeIso)}</span>
                     </div>
                     {(pt.errorBarMin !== 0 || pt.errorBarMax !== 0) && (
-                      <p className="mt-1 text-[11px] text-white/35">
+                      <p className="mt-1 pl-1 text-[11px] text-white/35 md:pl-2">
                         Uncertainty −{Math.abs(pt.errorBarMin)} / +{pt.errorBarMax} min
                       </p>
                     )}
@@ -276,14 +301,16 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                 <Zap className="h-4 w-4 fill-primary text-primary" />
                 Multi-leg breakdown
               </h3>
-              {timelineData.map((seg, i) => (
+              {timelineData.map((seg, i) => {
+                const leg = splitLegInstruction(seg.instructions);
+                return (
                 <motion.div
                   key={i}
                   layout
-                  className="glass-card group flex cursor-pointer items-center justify-between rounded-2xl border border-white/5 p-4 transition-all hover:border-primary/25 hover:bg-surface-bright/20"
+                  className="glass-card group flex cursor-pointer items-start justify-between gap-3 rounded-2xl border border-white/5 p-4 transition-all hover:border-primary/25 hover:bg-surface-bright/20"
                   onClick={() => setExpandedSeg(expandedSeg === i ? null : i)}
                 >
-                  <div className="flex min-w-0 items-center gap-4">
+                  <div className="flex min-w-0 flex-1 items-start gap-3 md:gap-4">
                     <div
                       className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all ${getStatusColor(
                         activeJourneyProgress,
@@ -305,13 +332,24 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                         <Car className="h-5 w-5 text-surface" />
                       )}
                     </div>
-                    <div className="min-w-0">
-                      <p className="font-headline text-sm font-bold tracking-tight">{seg.instructions}</p>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-white/40">
-                        {seg.duration} min · {seg.mode}
-                        {seg.confidence != null ? ` · ${seg.confidence}% conf` : ''}
-                        {seg.waitTimeMin ? ` · ${seg.waitTimeMin}m wait` : ''}
-                      </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="space-y-1.5">
+                        <p className="font-headline text-xs font-semibold leading-snug text-white/90 md:text-[13px]">
+                          {leg.from}
+                        </p>
+                        {leg.to && (
+                          <p className="border-l-2 border-primary/40 pl-3 font-headline text-xs leading-snug text-white/65 md:text-[13px]">
+                            <span className="text-primary/80">To </span>
+                            {leg.to}
+                          </p>
+                        )}
+                      </div>
+                      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-widest text-white/40">
+                        <span>{seg.duration} min</span>
+                        <span>{seg.mode}</span>
+                        {seg.confidence != null && <span>{seg.confidence}% conf</span>}
+                        {seg.waitTimeMin ? <span>{seg.waitTimeMin}m wait</span> : null}
+                      </div>
                       {expandedSeg === i && (seg.crowdLevel || seg.connectionRisk) && (
                         <p className="mt-2 text-xs leading-relaxed text-white/45">
                           {seg.crowdLevel ? `Crowd: ${seg.crowdLevel}. ` : ''}
@@ -326,7 +364,8 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                     }`}
                   />
                 </motion.div>
-              ))}
+              );
+              })}
             </div>
 
             <div className="space-y-4">
@@ -404,15 +443,10 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
               Route on map
             </h3>
             <GhostRouteMap
-              path={selectedRoute.routeGeometry ?? []}
+              path={resolveRoutePathForMap(selectedRoute)}
               fromLabel={selectedRoute.from}
               toLabel={selectedRoute.to}
             />
-            <p className="mt-3 flex items-start gap-2 text-[11px] leading-relaxed text-white/40">
-              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary/60" />
-              Uses your browser key (<code className="text-white/55">VITE_GOOGLE_MAPS_API_KEY</code>). Enable Maps JavaScript API +
-              billing in Google Cloud.
-            </p>
           </div>
         </aside>
       </div>

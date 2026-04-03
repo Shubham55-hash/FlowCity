@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'motion/react';
@@ -12,6 +12,25 @@ import { RootState, AppDispatch, fetchRoutes, selectRoute, updateSearchParams } 
 
 const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+/** `YYYY-MM-DD` in local calendar (not UTC) — required for `<input type="date" />`. */
+function toLocalDateInputValue(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** `HH:mm` for `<input type="time" />` from a Date in local time. */
+function toLocalTimeInputValue(d: Date): string {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function parseCombinedLocal(dateStr: string, timeStr: string): Date {
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  const [h, m] = timeStr.split(':').map(Number);
+  return new Date(Y, (M || 1) - 1, D || 1, h || 0, m || 0, 0, 0);
+}
+
 const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) => {
   const dispatch = useDispatch<AppDispatch>();
   const { results, selectedRoute, loading, searchParams } = useSelector((state: RootState) => state.journey);
@@ -20,6 +39,17 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
   const [toSuggestions, setToSuggestions] = useState<Array<{name:string;lat:number;lng:number}>>([]);
   const [showFromSuggestions, setShowFromSuggestions] = useState(false);
   const [showToSuggestions, setShowToSuggestions] = useState(false);
+  const travelDateInputRef = useRef<HTMLInputElement>(null);
+  const travelTimeInputRef = useRef<HTMLInputElement>(null);
+
+  /** Keep store aligned with what the date/time fields show on first paint. */
+  useEffect(() => {
+    if (!searchParams.time) {
+      dispatch(updateSearchParams({ time: new Date().toISOString() }));
+    }
+  }, [dispatch, searchParams.time]);
+
+  const effectiveDeparture = searchParams.time ? new Date(searchParams.time) : new Date();
 
   const fetchAutocomplete = async (query: string, type: 'from' | 'to') => {
     const trimmed = query.trim();
@@ -117,58 +147,87 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-           <div className="flex items-center gap-3 bg-surface-bright/20 rounded-xl p-3 border border-white/5 cursor-pointer" onClick={() => {
-             const now = new Date();
-             dispatch(updateSearchParams({ time: now.toISOString() }));
-           }}>
-             <Calendar className="w-4 h-4 text-primary" />
-             <span className="text-sm font-medium">Set Now</span>
-           </div>
-           <div className="flex items-center gap-3 bg-surface-bright/20 rounded-xl p-3 border border-white/5 cursor-pointer" onClick={() => {
-             const today = new Date();
-             today.setHours(9,0,0,0);
-             dispatch(updateSearchParams({ time: today.toISOString() }));
-           }}>
-             <Clock className="w-4 h-4 text-primary" />
-             <span className="text-sm font-medium">Set 09:00</span>
-           </div>
-         </div>
+        <div className="mt-6 grid grid-cols-2 gap-3 md:gap-4">
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-white/10 bg-surface-bright/20 p-3 text-left transition-colors hover:border-primary/35 hover:bg-surface-bright/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              onClick={() => {
+                const now = new Date();
+                const t = searchParams.time ? new Date(searchParams.time) : now;
+                const merged = new Date(now.getFullYear(), now.getMonth(), now.getDate(), t.getHours(), t.getMinutes(), 0, 0);
+                dispatch(updateSearchParams({ time: merged.toISOString() }));
+                void travelDateInputRef.current?.showPicker?.().catch(() => {});
+              }}
+            >
+              <Calendar className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+              <span className="text-sm font-semibold text-white">Set Now</span>
+            </button>
+            <span className="px-1 text-center font-headline text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
+              Travel date
+            </span>
+          </div>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-white/10 bg-surface-bright/20 p-3 text-left transition-colors hover:border-primary/35 hover:bg-surface-bright/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+              onClick={() => {
+                const base = searchParams.time ? new Date(searchParams.time) : new Date();
+                base.setHours(9, 0, 0, 0);
+                dispatch(updateSearchParams({ time: base.toISOString() }));
+                void travelTimeInputRef.current?.showPicker?.().catch(() => {});
+              }}
+            >
+              <Clock className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+              <span className="text-sm font-semibold text-white">
+                Set {toLocalTimeInputValue(new Date(new Date().setHours(9, 0, 0, 0)))}
+              </span>
+            </button>
+            <span className="px-1 text-center font-headline text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
+              Travel time
+            </span>
+          </div>
+        </div>
 
-         <div className="grid grid-cols-2 gap-4 mt-4">
-           <div className="flex flex-col gap-2">
-             <label className="text-xs font-headline tracking-widest text-white/40 uppercase">Travel Date</label>
-             <input
-               type="date"
-               className="w-full bg-surface-bright/30 border border-white/5 rounded-lg p-2 focus:outline-none focus:border-primary/50"
-               value={searchParams.time ? new Date(searchParams.time).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}
-               onChange={(e) => {
-                 const d = e.target.value;
-                 const current = searchParams.time ? new Date(searchParams.time) : new Date();
-                 const [h, m] = [current.getHours(), current.getMinutes()];
-                 const updated = new Date(`${d}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
-                 dispatch(updateSearchParams({ time: updated.toISOString() }));
-               }}
-             />
-           </div>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <div className="flex flex-col gap-2">
+            <label className="px-1 font-headline text-xs uppercase tracking-widest text-white/40" htmlFor="fc-travel-date">
+              Pick date
+            </label>
+            <input
+              id="fc-travel-date"
+              ref={travelDateInputRef}
+              type="date"
+              className="w-full rounded-xl border border-white/10 bg-surface-bright/30 p-3 font-medium text-white focus:border-primary/50 focus:outline-none"
+              value={toLocalDateInputValue(effectiveDeparture)}
+              onChange={(e) => {
+                const d = e.target.value;
+                if (!d) return;
+                const timePart = toLocalTimeInputValue(searchParams.time ? new Date(searchParams.time) : new Date());
+                dispatch(updateSearchParams({ time: parseCombinedLocal(d, timePart).toISOString() }));
+              }}
+            />
+          </div>
 
-           <div className="flex flex-col gap-2">
-             <label className="text-xs font-headline tracking-widest text-white/40 uppercase">Travel Time</label>
-             <input
-               type="time"
-               className="w-full bg-surface-bright/30 border border-white/5 rounded-lg p-2 focus:outline-none focus:border-primary/50"
-               value={searchParams.time ? new Date(searchParams.time).toTimeString().slice(0, 5) : new Date().toTimeString().slice(0, 5)}
-               onChange={(e) => {
-                 const t = e.target.value;
-                 const current = searchParams.time ? new Date(searchParams.time) : new Date();
-                 const [h, m] = t.split(':').map(Number);
-                 const updated = new Date(current);
-                 updated.setHours(h, m, 0, 0);
-                 dispatch(updateSearchParams({ time: updated.toISOString() }));
-               }}
-             />
-           </div>
-         </div>
+          <div className="flex flex-col gap-2">
+            <label className="px-1 font-headline text-xs uppercase tracking-widest text-white/40" htmlFor="fc-travel-time">
+              Pick time
+            </label>
+            <input
+              id="fc-travel-time"
+              ref={travelTimeInputRef}
+              type="time"
+              className="w-full rounded-xl border border-white/10 bg-surface-bright/30 p-3 font-medium text-white focus:border-primary/50 focus:outline-none"
+              value={toLocalTimeInputValue(effectiveDeparture)}
+              onChange={(e) => {
+                const t = e.target.value;
+                if (!t) return;
+                const datePart = toLocalDateInputValue(searchParams.time ? new Date(searchParams.time) : new Date());
+                dispatch(updateSearchParams({ time: parseCombinedLocal(datePart, t).toISOString() }));
+              }}
+            />
+          </div>
+        </div>
 
          <div className="col-span-full flex flex-wrap gap-2 mt-4">
            {['Safety', 'Time', 'Cost'].map((pref) => (

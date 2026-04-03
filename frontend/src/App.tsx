@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { useDispatch, useSelector } from "react-redux";
 import { io, Socket } from "socket.io-client";
 import { 
-  EyeOff, LifeBuoy, History, Zap, 
+  Ghost, LifeBuoy, History, Zap, 
   Bell, Clock, GitBranch, Map
 } from "lucide-react";
 import JourneyPlanner from "./components/JourneyPlanner";
@@ -16,91 +16,131 @@ import { RootState, AppDispatch, setAlert } from "./store/journeySlice";
 
 type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'plan' | 'history' | 'heatmap';
 
-const ActionTile = ({ icon: Icon, title, subtitle, active = false, onClick }: any) => (
-  <motion.div 
-    whileHover={{ scale: 1.02 }}
-    whileTap={{ scale: 0.98 }}
+/** Tall amber-glass panel inspired by showcase tiles: center hero glyph, corner badge, copy anchored low. */
+const FeaturePanel = ({ icon: Icon, title, subtitle, active = false, onClick }: any) => (
+  <motion.button
+    type="button"
+    whileHover={{ scale: 1.012 }}
+    whileTap={{ scale: 0.992 }}
     onClick={onClick}
-    className={`relative aspect-square rounded-2xl p-5 flex flex-col justify-between cursor-pointer group transition-all overflow-hidden border ${active ? 'border-primary/60' : 'border-primary/40'}`}
+    className={`group relative flex min-h-[11.5rem] w-full shrink-0 snap-center flex-col justify-end overflow-hidden rounded-[1.85rem] p-5 text-left shadow-[0_20px_50px_rgba(0,0,0,0.35)] outline-none transition-[box-shadow] focus-visible:ring-2 focus-visible:ring-primary/50 sm:min-h-[13rem] ${
+      active
+        ? 'border border-primary/35 ring-1 ring-primary/20'
+        : 'border border-amber-200/10 hover:border-amber-200/18'
+    }`}
   >
-    {/* Background gradient - Yellow themed */}
-    <div className={`absolute inset-0 transition-all ${active ? 'bg-gradient-to-br from-primary/50 via-primary/20 to-primary/30' : 'bg-gradient-to-br from-primary/30 via-primary/15 to-primary/20'}`} />
-    
-    {/* Icon background */}
-    <div className="absolute inset-0 flex items-center justify-center opacity-15 group-hover:opacity-25 transition-opacity">
-      <Icon className="w-32 h-32 text-white" strokeWidth={0.5} />
-    </div>
-    
-    {/* Content */}
-    <div className="relative z-10" />
-    <div className="relative z-10">
-      <span className="block font-headline text-sm font-bold tracking-tight text-white">{title}</span>
-      <span className="text-[10px] text-white/70 uppercase tracking-tighter">{subtitle}</span>
+    <div
+      className={`absolute inset-0 bg-gradient-to-b transition-opacity ${
+        active
+          ? 'from-primary/25 via-amber-950/40 to-black/70'
+          : 'from-amber-950/55 via-amber-900/28 to-black/65 group-hover:from-amber-900/50'
+      }`}
+    />
+    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_85%_55%_at_50%_32%,rgba(255,191,0,0.14),transparent_58%)]" />
+    <div className="pointer-events-none absolute inset-0 backdrop-blur-[2px]" />
+
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-8">
+      <Icon
+        className={`h-[4.25rem] w-[4.25rem] transition-colors sm:h-[4.75rem] sm:w-[4.75rem] ${
+          active ? 'text-white/35' : 'text-white/22 group-hover:text-white/30'
+        }`}
+        strokeWidth={0.85}
+        aria-hidden
+      />
     </div>
 
-    {/* Small icon in corner */}
-    <div className="absolute top-4 right-4 z-10">
-      <div className={`w-10 h-10 rounded-lg flex items-center justify-center backdrop-blur-sm ${active ? 'bg-white/30 border border-white/40' : 'bg-white/20 border border-white/30'}`}>
-        <Icon className="w-5 h-5 text-surface" strokeWidth={1.5} />
-      </div>
+    <div className="absolute right-3.5 top-3.5 z-10 rounded-xl border border-white/12 bg-black/30 p-2 backdrop-blur-md">
+      <Icon className="h-4 w-4 text-primary" strokeWidth={1.65} aria-hidden />
     </div>
-  </motion.div>
+
+    <div className="relative z-10">
+      <span className="font-headline block text-[15px] font-bold leading-snug tracking-tight text-white">{title}</span>
+      <span className="mt-1 block text-[10px] font-bold uppercase tracking-[0.18em] text-white/45">{subtitle}</span>
+    </div>
+  </motion.button>
 );
 
 const FlowView = ({ selectedRoute, onGhostClick, onRescueClick, onHistoryClick, onHeatmapClick }: any) => (
   <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
-    <section className="flex flex-col items-center justify-center pt-4">
-      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-white/5 px-8 py-6 text-center backdrop-blur-sm">
+    <section className="relative flex flex-col items-center justify-center pt-2">
+      <div className="pointer-events-none absolute inset-x-0 top-1/2 h-48 -translate-y-1/2 bg-[radial-gradient(ellipse_70%_80%_at_50%_50%,rgba(255,191,0,0.07),transparent_72%)]" />
+      <div className="relative w-full max-w-md px-2 py-8 text-center">
         <p className="font-headline text-[10px] font-black uppercase tracking-[0.35em] text-white/35">Next commute</p>
         {selectedRoute ? (
           <>
-            <p className="mt-2 font-headline text-4xl font-black tracking-tight text-primary">{selectedRoute.eta} min</p>
+            <p className="mt-2 font-headline text-4xl font-black tracking-tight text-primary drop-shadow-[0_0_28px_rgba(255,191,0,0.25)]">{selectedRoute.eta} min</p>
             <p className="mt-1 text-sm font-medium text-white/55">{selectedRoute.summary}</p>
             <p className="mt-2 text-[11px] text-white/40">
               ₹{selectedRoute.cost} · {selectedRoute.from} → {selectedRoute.to}
             </p>
           </>
         ) : (
-          <p className="mt-3 text-sm text-white/55">Plan a route to unlock simulation, replay, and heatmaps.</p>
+          <>
+            <div className="mt-5 flex flex-col items-center gap-3">
+              <div className="flex items-center justify-center gap-3">
+                <Zap className="h-8 w-8 text-primary drop-shadow-[0_0_14px_rgba(255,191,0,0.45)]" strokeWidth={2} aria-hidden />
+                <span className="font-headline text-2xl font-black tracking-tight text-white/92">FlowCity</span>
+              </div>
+              <p className="max-w-xs text-xs leading-relaxed text-white/42">
+                Real-time kinetic flow optimization for city commuting.
+              </p>
+            </div>
+            <p className="mt-5 text-sm text-white/52">Plan a route to unlock simulation, replay, and heatmaps.</p>
+          </>
         )}
       </div>
-      <p className="mt-4 max-w-[280px] text-center text-sm font-medium text-white/50">
+      <p className="relative mt-1 max-w-[19rem] text-center text-xs font-medium leading-relaxed text-white/45">
         Commute Replay saves your trip history and surfaces personalized suggestions from it.
       </p>
     </section>
 
     <section>
-      <div className="glass-card rounded-3xl p-6 shadow-2xl relative overflow-hidden border border-white/5">
-        <div className="flex justify-between items-start mb-6">
+      <div className="relative overflow-hidden rounded-[1.85rem] border border-amber-200/10 bg-gradient-to-br from-amber-950/45 via-black/40 to-black/60 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.4)] backdrop-blur-md">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_80%_0%,rgba(255,191,0,0.08),transparent_55%)]" />
+        <div className="relative flex items-start justify-between gap-4">
           <div>
-            <h2 className="font-headline text-2xl font-bold tracking-tight mb-1">{selectedRoute?.summary || 'Select a Route'}</h2>
-            <div className="flex items-center gap-3 text-white/40 text-[10px] uppercase font-black tracking-widest">
-              <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {selectedRoute?.eta || '--'} min</span>
-              <span className="w-1 h-1 bg-white/20 rounded-full" />
-              <span className="flex items-center gap-1">₹ {selectedRoute?.cost || '--'}</span>
+            <h2 className="font-headline text-xl font-bold tracking-tight text-white sm:text-2xl">{selectedRoute?.summary || 'Select a Route'}</h2>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-widest text-white/38">
+              <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {selectedRoute?.eta || '--'} min</span>
+              <span className="h-1 w-1 rounded-full bg-white/25" />
+              <span>₹ {selectedRoute?.cost || '--'}</span>
             </div>
           </div>
           {selectedRoute && (
-             <div className="bg-secondary/10 border border-secondary/30 px-3 py-1 rounded-full">
-                <span className="text-[10px] font-black uppercase tracking-widest text-secondary">Optimized</span>
-             </div>
+            <div className="shrink-0 rounded-full border border-secondary/35 bg-secondary/10 px-3 py-1">
+              <span className="text-[10px] font-black uppercase tracking-widest text-secondary">Optimized</span>
+            </div>
           )}
         </div>
         <button 
+          type="button"
           onClick={onGhostClick}
-          className={`w-full py-5 font-headline font-black uppercase tracking-[0.2em] rounded-2xl transition-all
-            ${selectedRoute ? 'bg-primary text-surface shadow-[0_0_30px_#ffbf0044] hover:scale-[1.02]' : 'bg-white/5 text-white/20 cursor-not-allowed'}`}
+          className={`relative mt-6 w-full py-4 font-headline text-sm font-black uppercase tracking-[0.2em] transition-all cursor-pointer sm:py-5 sm:text-base ${
+            selectedRoute
+              ? 'rounded-2xl bg-primary text-surface shadow-[0_0_34px_rgba(255,191,0,0.35)] hover:brightness-105'
+              : 'rounded-2xl border border-white/12 bg-white/[0.07] text-white/65 hover:bg-white/[0.11] hover:text-white/85'
+          }`}
         >
           {selectedRoute ? 'Initiate Pulse Simulation' : 'Enter Departure Plan'}
         </button>
       </div>
     </section>
 
-    <section className="grid grid-cols-2 gap-4 pb-8">
-      <ActionTile icon={EyeOff} title="Ghost Commute" subtitle="Stimulate Flow" onClick={onGhostClick} active={!!selectedRoute} />
-      <ActionTile icon={LifeBuoy} title="Rescue Shield" subtitle="Smart Backup" onClick={onRescueClick} />
-      <ActionTile icon={History} title="Commute Replay" subtitle="History & tips" onClick={onHistoryClick} />
-      <ActionTile icon={Map} title="Route Heatmap" subtitle="Traffic View" onClick={onHeatmapClick} />
+    <section className="pb-8">
+      <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 pt-1 [scrollbar-width:none] md:mx-0 md:grid md:snap-none md:grid-cols-2 md:gap-4 md:overflow-visible [&::-webkit-scrollbar]:hidden">
+        <div className="min-w-[48%] max-w-[48%] md:min-w-0 md:max-w-none">
+          <FeaturePanel icon={Ghost} title="Ghost Commute" subtitle="Smart invisible routing" onClick={onGhostClick} active={!!selectedRoute} />
+        </div>
+        <div className="min-w-[48%] max-w-[48%] md:min-w-0 md:max-w-none">
+          <FeaturePanel icon={LifeBuoy} title="Rescue Shield" subtitle="Smart backup" onClick={onRescueClick} />
+        </div>
+        <div className="min-w-[48%] max-w-[48%] md:min-w-0 md:max-w-none">
+          <FeaturePanel icon={History} title="Commute Replay" subtitle="History & tips" onClick={onHistoryClick} />
+        </div>
+        <div className="min-w-[48%] max-w-[48%] md:min-w-0 md:max-w-none">
+          <FeaturePanel icon={Map} title="Route Heatmap" subtitle="Traffic view" onClick={onHeatmapClick} />
+        </div>
+      </div>
     </section>
   </motion.div>
 );
@@ -170,7 +210,7 @@ export default function App() {
       <RescueAlertOverlay />
       <div className="fixed inset-0 -z-10 bg-surface" />
       <div className="fixed inset-0 -z-10 opacity-30 pointer-events-none grayscale contrast-125">
-        <img className="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD8DHc3I2QiURDjUJHdCXDERSUaGwNroZWuw1yNm2pjEMoUgiXa9CuOR5H-1bGOciXmqudM9HkVKxLT5wQiEENIHTx-AIcVfiBZBv2bRGweDN8WWauj5QJbJayYEwwfsPx4_gFn-ORqFT2EQz0Z1tmjGTlzMbd7NrKiE5weBNqNAkxjHdMkLqeTUohT5fcGPt9SIk2bqLJyi884t8H0vPtPkQA20dOYIWyknQrHoxL2BmJPPZnWYVCHgsUnDQtBb0l85rPJbAfMHD8" alt="BG" />
+        <img className="h-full w-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD8DHc3I2QiURDjUJHdCXDERSUaGwNroZWuw1yNm2pjEMoUgiXa9CuOR5H-1bGOciXmqudM9HkVKxLT5wQiEENIHTx-AIcVfiBZBv2bRGweDN8WWauj5QJbJayYEwwfsPx4_gFn-ORqFT2EQz0Z1tmjGTlzMbd7NrKiE5weBNqNAkxjHdMkLqeTUohT5fcGPt9SIk2bqLJyi884t8H0vPtPkQA20dOYIWyknQrHoxL2BmJPPZnWYVCHgsUnDQtBb0l85rPJbAfMHD8" alt="" />
         <div className="absolute inset-0 bg-gradient-to-b from-surface/60 via-surface/40 to-surface" />
       </div>
 
@@ -200,7 +240,7 @@ export default function App() {
             <GhostCommuteView key="ghost" onBack={() => setView('flow')} />
           )}
           {view === 'plan' && <JourneyPlanner key="plan" onNavigate={() => setView('flow')} />}
-          {view === 'history' && <CommuteReplayDashboard key="history" />}
+          {view === 'history' && <CommuteReplayDashboard key="history" onOpenPlan={() => setView('plan')} />}
           {view === 'alerts' && <RescueShieldView key="alerts" />}
           {view === 'heatmap' && (
             <div key="heatmap" className="w-full">

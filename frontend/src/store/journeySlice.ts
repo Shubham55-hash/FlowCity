@@ -1,5 +1,6 @@
 import { configureStore, createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
+import { formatLegInstructions } from '../utils/formatLegInstructions';
 
 export interface TimelinePoint {
   timeIso: string;
@@ -81,7 +82,7 @@ function routeFromSimulation(
   const segments: RouteSegment[] = (segmentsRaw || []).map((s) => ({
     mode: mapLegType(String(s.type)),
     duration: Number(s.predictedDurationMin) || 0,
-    instructions: `${s.from} → ${s.to}`,
+    instructions: formatLegInstructions(String(s.from ?? ''), String(s.to ?? '')),
     confidence: typeof s.confidence === 'number' ? s.confidence : undefined,
     waitTimeMin: typeof s.waitTimeMin === 'number' ? s.waitTimeMin : undefined,
     crowdLevel: typeof s.crowdLevel === 'string' ? s.crowdLevel : undefined,
