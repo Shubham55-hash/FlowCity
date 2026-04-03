@@ -9,7 +9,10 @@ import {
   Train, Car, Info
 } from 'lucide-react';
 import { RootState, AppDispatch, fetchRoutes, selectRoute, updateSearchParams } from '../store/journeySlice';
+<<<<<<< HEAD
 import { formatRouteHeadline } from '../utils/formatLegInstructions';
+=======
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
 
 const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -278,9 +281,13 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                     {route.mode === 'Metro' ? <Train className="w-6 h-6" /> : <Car className="w-6 h-6" />}
                   </div>
                   <div>
+<<<<<<< HEAD
                     <h3 className="font-headline font-bold text-lg mb-1">
                       {formatRouteHeadline(route.from, route.to)}
                     </h3>
+=======
+                    <h3 className="font-headline font-bold text-lg mb-1">{route.summary}</h3>
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                     <div className="flex items-center gap-4 text-sm text-white/40 font-medium">
                       <span className="flex items-center gap-1"><Clock className="w-4 h-4" /> {route.eta} min</span>
                       <span className="flex items-center gap-1">₹ {route.cost}</span>

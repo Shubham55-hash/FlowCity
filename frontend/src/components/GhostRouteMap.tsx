@@ -28,7 +28,6 @@ export default function GhostRouteMap({
   // Stable key: parent often passes a new `path` array each render (simulation tick) with identical coords.
   const pathKey = JSON.stringify(
     path
-      .map((p) => ({ lat: Number(p.lat), lng: Number(p.lng) }))
       .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
       .map((p) => [Math.round(p.lat * 1e6) / 1e6, Math.round(p.lng * 1e6) / 1e6])
   );

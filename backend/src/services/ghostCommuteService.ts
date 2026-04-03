@@ -252,22 +252,6 @@ class GhostCommuteService {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  /** Real station name for synthetic legs (POIs → nearest stop, e.g. college → Vile Parle / Andheri). */
-  private nearestStopName(loc: Location): string {
-    const byName = stationResolver.getStationInfo(loc.name);
-    if (byName) return byName.name;
-    const near = stationResolver.nearestStation(loc.lat, loc.lng);
-    return near?.name ?? loc.name;
-  }
-
-  private metroAccessLabel(loc: Location): string {
-    return `${this.nearestStopName(loc)} Metro Stn`;
-  }
-
-  private railAccessLabel(loc: Location): string {
-    return `${this.nearestStopName(loc)} Station`;
-  }
-
   private async fetchORSDirections(
     start: Location,
     end: Location,
@@ -314,12 +298,10 @@ class GhostCommuteService {
           transferRiskMin: 0, dataSource: 'real',
         });
       } else if (totalDistKm < 8) {
-        const startMetro = this.metroAccessLabel(start);
-        const endMetro = this.metroAccessLabel(end);
         segments.push(
-          { type: 'walk', from: start.name, to: startMetro, fromLatLng: { lat: start.lat, lng: start.lng }, toLatLng: { lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }, baseDurationMin: 7, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'real' },
-          { type: 'metro', from: startMetro, to: endMetro, baseDurationMin: Math.round(totalDistKm * 3.2), historicalDelayMin: superPeak ? 6 : peak ? 3 : 1, crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'real' },
-          { type: 'walk', from: endMetro, to: end.name, toLatLng: { lat: end.lat, lng: end.lng }, fromLatLng: { lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'real' },
+          { type: 'walk', from: start.name, to: `${start.name} Metro Stn`, fromLatLng: { lat: start.lat, lng: start.lng }, toLatLng: { lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }, baseDurationMin: 7, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'real' },
+          { type: 'metro', from: `${start.name} Metro Stn`, to: `${end.name} Metro Stn`, baseDurationMin: Math.round(totalDistKm * 3.2), historicalDelayMin: superPeak ? 6 : peak ? 3 : 1, crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'real' },
+          { type: 'walk', from: `${end.name} Metro Stn`, to: end.name, toLatLng: { lat: end.lat, lng: end.lng }, fromLatLng: { lat: (start.lat + end.lat) / 2, lng: (start.lng + end.lng) / 2 }, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'real' },
         );
       } else {
         // Long route: walk + local train (realistic Mumbai suburban train calibration)
@@ -327,12 +309,10 @@ class GhostCommuteService {
         const trainDurationFromDistance = Math.round(transitBaseDistKm / 0.67);  // 0.67 km/min = 40 km/h
         const trainMin = Math.max(20, trainDurationFromDistance + (peak ? 12 : 8));
 
-        const startRail = this.railAccessLabel(start);
-        const endRail = this.railAccessLabel(end);
         segments.push(
-          { type: 'walk', from: start.name, to: startRail, fromLatLng: { lat: start.lat, lng: start.lng }, toLatLng: { lat: start.lat + 0.004, lng: start.lng + 0.004 }, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'real' },
-          { type: 'local_train', from: startRail, to: endRail, baseDurationMin: trainMin, historicalDelayMin: superPeak ? 12 : peak ? 7 : 2, crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, transferRiskMin: 5, dataSource: 'real' },
-          { type: 'walk', from: endRail, to: end.name, fromLatLng: { lat: end.lat - 0.004, lng: end.lng - 0.004 }, toLatLng: { lat: end.lat, lng: end.lng }, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'real' },
+          { type: 'walk', from: start.name, to: `${start.name} Station`, fromLatLng: { lat: start.lat, lng: start.lng }, toLatLng: { lat: start.lat + 0.004, lng: start.lng + 0.004 }, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'real' },
+          { type: 'local_train', from: `${start.name} Station`, to: `${end.name} Station`, baseDurationMin: trainMin, historicalDelayMin: superPeak ? 12 : peak ? 7 : 2, crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, transferRiskMin: 5, dataSource: 'real' },
+          { type: 'walk', from: `${end.name} Station`, to: end.name, fromLatLng: { lat: end.lat - 0.004, lng: end.lng - 0.004 }, toLatLng: { lat: end.lat, lng: end.lng }, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'real' },
         );
       }
 
@@ -767,48 +747,42 @@ class GhostCommuteService {
     }
 
     if (distKm < 8) {
-      const startMetro = this.metroAccessLabel(start);
-      const endMetro = this.metroAccessLabel(end);
       return [
-        { type: 'walk', from: start.name, to: startMetro, baseDurationMin: 7, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
-        { type: 'metro', from: startMetro, to: endMetro, baseDurationMin: Math.round(distKm * 3.5), historicalDelayMin: superPeak ? 6 : peak ? 3 : 1, crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'heuristic' },
-        { type: 'walk', from: endMetro, to: end.name, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'walk', from: start.name, to: `${start.name} Metro Stn`, baseDurationMin: 7, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'metro', from: `${start.name} Metro Stn`, to: `${end.name} Metro Stn`, baseDurationMin: Math.round(distKm * 3.5), historicalDelayMin: superPeak ? 6 : peak ? 3 : 1, crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'heuristic' },
+        { type: 'walk', from: `${end.name} Metro Stn`, to: end.name, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
       ];
     }
 
-    const startInfo = stationResolver.getStationInfo(start.name) ?? stationResolver.nearestStation(start.lat, start.lng);
-    const endInfo = stationResolver.getStationInfo(end.name) ?? stationResolver.nearestStation(end.lat, end.lng);
+    const startInfo = stationResolver.getStationInfo(start.name);
+    const endInfo = stationResolver.getStationInfo(end.name);
     const sameLine = startInfo && endInfo && startInfo.line === endInfo.line;
 
     // ── Direct Train (Same Line) ──────────────────────────────────────────
     if (sameLine || distKm < 40) {
-      const startRail = this.railAccessLabel(start);
-      const endRail = this.railAccessLabel(end);
       return [
-        { type: 'walk', from: start.name, to: startRail, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'walk', from: start.name, to: `${start.name} Station`, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
         { 
           type: 'local_train', 
-          from: startRail, 
-          to: endRail, 
+          from: `${start.name} Station`, 
+          to: `${end.name} Station`, 
           baseDurationMin: Math.round(distKm * 1.5), 
           historicalDelayMin: superPeak ? 12 : peak ? 7 : 2, 
           crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, 
           transferRiskMin: 5, 
           dataSource: 'heuristic' 
         },
-        { type: 'walk', from: endRail, to: end.name, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'walk', from: `${end.name} Station`, to: end.name, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
       ];
     }
 
     // ── Multi-Leg (Different Lines / Far Distance) ───────────────────────
     const midPoint = 'Dadar Inter-Change';
-    const startRail = this.railAccessLabel(start);
-    const endRail = this.railAccessLabel(end);
     return [
-      { type: 'walk', from: start.name, to: startRail, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
-      { type: 'local_train', from: startRail, to: midPoint, baseDurationMin: Math.round(distKm * 0.9), historicalDelayMin: peak ? 9 : 3, crowdFactor: peak ? 1.6 : 1.1, transferRiskMin: 8, dataSource: 'heuristic' },
-      { type: 'local_train', from: midPoint, to: endRail, baseDurationMin: Math.round(distKm * 0.6), historicalDelayMin: peak ? 10 : 4, crowdFactor: peak ? 1.5 : 1.0, transferRiskMin: 5, dataSource: 'heuristic' },
-      { type: 'walk', from: endRail, to: end.name, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      { type: 'walk', from: start.name, to: `${start.name} Station`, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      { type: 'local_train', from: `${start.name} Station`, to: midPoint, baseDurationMin: Math.round(distKm * 0.9), historicalDelayMin: peak ? 9 : 3, crowdFactor: peak ? 1.6 : 1.1, transferRiskMin: 8, dataSource: 'heuristic' },
+      { type: 'local_train', from: midPoint, to: `${end.name} Station`, baseDurationMin: Math.round(distKm * 0.6), historicalDelayMin: peak ? 10 : 4, crowdFactor: peak ? 1.5 : 1.0, transferRiskMin: 5, dataSource: 'heuristic' },
+      { type: 'walk', from: `${end.name} Station`, to: end.name, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
     ];
   }
 

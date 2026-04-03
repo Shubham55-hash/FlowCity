@@ -18,8 +18,12 @@ import {
   Sparkles,
 } from 'lucide-react';
 import GhostRouteMap from './GhostRouteMap';
+<<<<<<< HEAD
 import { splitLegInstruction, formatRouteHeadline } from '../utils/formatLegInstructions';
 import { getRouteCoordinates } from '../utils/stationCoordinates';
+=======
+import { splitLegInstruction } from '../utils/formatLegInstructions';
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
 import {
   RootState,
   AppDispatch,
@@ -49,10 +53,13 @@ function resolveRoutePathForMap(route: Route): Array<{ lat: number; lng: number 
   if (route.fromCoords && route.toCoords) {
     return [route.fromCoords, route.toCoords];
   }
+<<<<<<< HEAD
   if (route.from?.trim() && route.to?.trim()) {
     const { from, to } = getRouteCoordinates(route.from, route.to);
     return [from, to];
   }
+=======
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
   return [];
 }
 
@@ -206,10 +213,17 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                   ))}
                 </div>
                 <h2 className="font-headline text-base font-black uppercase leading-snug tracking-tight text-white/95 md:text-lg">
+<<<<<<< HEAD
                   {formatRouteHeadline(selectedRoute.from, selectedRoute.to)}
                 </h2>
                 <p className="mt-2 text-sm tabular-nums text-white/55">
                   ~{selectedRoute.eta} min · <span className="text-primary/90">₹{selectedRoute.cost}</span>
+=======
+                  {selectedRoute.summary}
+                </h2>
+                <p className="mt-2 text-sm tabular-nums text-white/45">
+                  ~{selectedRoute.eta} min · ₹{selectedRoute.cost}
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                 </p>
               </div>
               <div className="text-left md:text-right">
@@ -224,6 +238,7 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
               <p className="mb-3 text-[10px] font-black uppercase tracking-[0.35em] text-white/35">
                 Confidence band (by leg)
               </p>
+<<<<<<< HEAD
               <div className="relative h-28 w-full">
                 <svg className="h-full w-full overflow-visible" viewBox="0 0 100 56" preserveAspectRatio="none">
                   {bandPathD && (
@@ -266,6 +281,44 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                   style={{ left: `${activeJourneyProgress}%`, top: `${(40 / 56) * 100}%` }}
                 />
               </div>
+=======
+              <svg className="h-28 w-full overflow-visible" viewBox="0 0 100 56" preserveAspectRatio="none">
+                {bandPathD && (
+                  <path d={bandPathD} className="fill-primary/10 stroke-none" vectorEffect="non-scaling-stroke" />
+                )}
+                <line x1="0" y1="40" x2="100" y2="40" stroke="rgba(255,255,255,0.08)" strokeWidth="0.35" strokeLinecap="round" />
+                <motion.line
+                  x1="0"
+                  y1="40"
+                  x2={activeJourneyProgress}
+                  y2="40"
+                  className="stroke-primary"
+                  strokeWidth="0.45"
+                  strokeLinecap="round"
+                  style={{ filter: 'drop-shadow(0 0 3px rgba(255,191,0,0.5))' }}
+                />
+                {timelineData.map((seg, i) => (
+                  <g key={i}>
+                    <circle
+                      cx={pctAt(seg.end)}
+                      cy={40}
+                      r={1.1}
+                      className={
+                        activeJourneyProgress >= pctAt(seg.end)
+                          ? 'fill-secondary stroke-white/30'
+                          : 'fill-[#393939] stroke-white/20'
+                      }
+                      strokeWidth="0.25"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                ))}
+                <g transform={`translate(${activeJourneyProgress}, 40)`}>
+                  <circle r={2.2} cy={0} className="fill-primary/35 blur-sm" />
+                  <circle r={1.2} cy={0} className="fill-[#131313] stroke-primary" strokeWidth="0.35" />
+                </g>
+              </svg>
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
               <div className="mt-2 flex justify-between px-0.5">
                 {tickLabels.map(({ m, pct }) => (
                   <span key={pct} className="text-[10px] font-bold uppercase tracking-widest text-white/30">
@@ -392,9 +445,13 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                   >
                     <div className="mb-4 flex justify-between gap-4">
                       <div className="min-w-0">
+<<<<<<< HEAD
                         <span className="block font-headline text-lg font-black">
                           {formatRouteHeadline(alt.from, alt.to)}
                         </span>
+=======
+                        <span className="block font-headline text-lg font-black">{alt.summary}</span>
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                         <span className="text-xs text-white/40">
                           Journey{' '}
                           <span

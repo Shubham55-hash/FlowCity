@@ -4,7 +4,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { io, Socket } from "socket.io-client";
 import { 
   Ghost, LifeBuoy, History, Zap, 
-  Bell, GitBranch, Map
+  Bell, Clock, GitBranch, Map
 } from "lucide-react";
 import JourneyPlanner from "./components/JourneyPlanner";
 import GhostCommuteView from "./components/GhostCommuteView";
@@ -13,7 +13,6 @@ import RouteHeatmap from "./components/RouteHeatmap";
 import RescueShieldView from "./components/RescueShieldView";
 import RescueAlertOverlay from "./components/RescueAlertOverlay";
 import { RootState, AppDispatch, setAlert } from "./store/journeySlice";
-import { formatRouteHeadline } from "./utils/formatLegInstructions";
 
 type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'plan' | 'history' | 'heatmap';
 
@@ -69,14 +68,10 @@ const FlowView = ({ selectedRoute, onGhostClick, onRescueClick, onHistoryClick, 
         <p className="font-headline text-[10px] font-black uppercase tracking-[0.35em] text-white/35">Next commute</p>
         {selectedRoute ? (
           <>
-            <p className="mt-3 font-headline text-2xl font-black leading-tight tracking-tight text-white drop-shadow-[0_0_20px_rgba(255,191,0,0.12)] sm:text-3xl">
-              {formatRouteHeadline(selectedRoute.from, selectedRoute.to)}
-            </p>
-            <p className="mt-2 font-headline text-lg font-bold tabular-nums tracking-tight text-white/70 sm:text-xl">
-              ~{selectedRoute.eta} min est.
-            </p>
-            <p className="mt-3 font-headline text-3xl font-black tabular-nums text-primary drop-shadow-[0_0_28px_rgba(255,191,0,0.25)] sm:text-4xl">
-              ₹{selectedRoute.cost}
+            <p className="mt-2 font-headline text-4xl font-black tracking-tight text-primary drop-shadow-[0_0_28px_rgba(255,191,0,0.25)]">{selectedRoute.eta} min</p>
+            <p className="mt-1 text-sm font-medium text-white/55">{selectedRoute.summary}</p>
+            <p className="mt-2 text-[11px] text-white/40">
+              ₹{selectedRoute.cost} · {selectedRoute.from} → {selectedRoute.to}
             </p>
           </>
         ) : (
@@ -104,13 +99,11 @@ const FlowView = ({ selectedRoute, onGhostClick, onRescueClick, onHistoryClick, 
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_80%_0%,rgba(255,191,0,0.08),transparent_55%)]" />
         <div className="relative flex items-start justify-between gap-4">
           <div>
-            <h2 className="font-headline text-xl font-bold tracking-tight text-white sm:text-2xl">
-              {selectedRoute ? formatRouteHeadline(selectedRoute.from, selectedRoute.to) : 'Select a Route'}
-            </h2>
+            <h2 className="font-headline text-xl font-bold tracking-tight text-white sm:text-2xl">{selectedRoute?.summary || 'Select a Route'}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-black uppercase tracking-widest text-white/38">
-              <span>~{selectedRoute?.eta ?? '--'} min</span>
-              <span className="h-1 w-1 rounded-full bg-white/25" aria-hidden />
-              <span>₹ {selectedRoute?.cost ?? '--'}</span>
+              <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {selectedRoute?.eta || '--'} min</span>
+              <span className="h-1 w-1 rounded-full bg-white/25" />
+              <span>₹ {selectedRoute?.cost || '--'}</span>
             </div>
           </div>
           {selectedRoute && (

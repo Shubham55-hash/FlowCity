@@ -1,7 +1,6 @@
 import { configureStore, createSlice, PayloadAction, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
 import { formatLegInstructions } from '../utils/formatLegInstructions';
-import { getRouteCoordinates } from '../utils/stationCoordinates';
 
 export interface TimelinePoint {
   timeIso: string;
@@ -45,16 +44,6 @@ export interface Route {
 
 const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
-/** Coerce API / JSON points (numbers or numeric strings) for Leaflet + map fallbacks */
-function normalizePoint(p: unknown): { lat: number; lng: number } | undefined {
-  if (!p || typeof p !== 'object') return undefined;
-  const o = p as Record<string, unknown>;
-  const lat = Number(o.lat ?? o.latitude);
-  const lng = Number(o.lng ?? o.longitude ?? o.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
-  return { lat, lng };
-}
-
 function mapLegType(t: string): string {
   switch (t) {
     case 'walk':
@@ -86,7 +75,7 @@ function routeFromSimulation(
   simulation: Record<string, unknown>
 ): Route {
   const segmentsRaw = simulation.segments as Record<string, unknown>[] | undefined;
-  const routeGeometryRaw = simulation.routeGeometry;
+  const routeGeometry = simulation.routeGeometry as Route['routeGeometry'];
   const journeyTimeline = simulation.journeyTimeline as TimelinePoint[] | undefined;
   const dataSources = simulation.dataSources as string[] | undefined;
 
@@ -98,35 +87,17 @@ function routeFromSimulation(
     waitTimeMin: typeof s.waitTimeMin === 'number' ? s.waitTimeMin : undefined,
     crowdLevel: typeof s.crowdLevel === 'string' ? s.crowdLevel : undefined,
     connectionRisk: typeof s.connectionRisk === 'string' ? s.connectionRisk : undefined,
-    fromLatLng: normalizePoint(s.fromLatLng),
-    toLatLng: normalizePoint(s.toLatLng),
+    fromLatLng:
+      s.fromLatLng && typeof s.fromLatLng === 'object'
+        ? (s.fromLatLng as { lat: number; lng: number })
+        : undefined,
+    toLatLng:
+      s.toLatLng && typeof s.toLatLng === 'object' ? (s.toLatLng as { lat: number; lng: number }) : undefined,
   }));
 
-  const geomFromApi = Array.isArray(routeGeometryRaw)
-    ? (routeGeometryRaw as unknown[]).map(normalizePoint).filter((p): p is NonNullable<typeof p> => p != null)
-    : [];
-
-  const fallback = getRouteCoordinates(from, to);
-
-  let fromCoords = geomFromApi[0];
-  let toCoords = geomFromApi.length > 1 ? geomFromApi[geomFromApi.length - 1] : undefined;
-
-  if (!fromCoords && segments.length) {
-    fromCoords = segments[0].fromLatLng ?? segments[0].toLatLng;
-  }
-  if (!toCoords && segments.length) {
-    const last = segments[segments.length - 1];
-    toCoords = last.toLatLng ?? last.fromLatLng;
-  }
-  fromCoords = fromCoords ?? fallback.from;
-  toCoords = toCoords ?? fallback.to;
-
-  const routeGeometry: Route['routeGeometry'] =
-    geomFromApi.length >= 2
-      ? geomFromApi
-      : fromCoords && toCoords
-        ? [fromCoords, toCoords]
-        : undefined;
+  const geom = routeGeometry?.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)) ?? [];
+  const fromCoords = geom[0];
+  const toCoords = geom.length > 1 ? geom[geom.length - 1] : undefined;
 
   return {
     id,
@@ -142,7 +113,7 @@ function routeFromSimulation(
     segments,
     fromCoords,
     toCoords,
-    routeGeometry,
+    routeGeometry: geom.length ? geom : undefined,
     dataSources,
     journeyTimeline,
   };
@@ -196,7 +167,6 @@ const initialState: JourneyState = {
 
 /** Fallback when the API is offline — keeps the UI usable */
 function mockRoutes(params: { from: string; to: string }): Route[] {
-  const { from: fc, to: tc } = getRouteCoordinates(params.from, params.to);
   return [
     {
       id: 'R1',
@@ -213,9 +183,6 @@ function mockRoutes(params: { from: string; to: string }): Route[] {
         { mode: 'Walk', duration: 5, instructions: 'Walk to station' },
         { mode: 'Metro', duration: 27, instructions: 'Metro towards destination' },
       ],
-      fromCoords: fc,
-      toCoords: tc,
-      routeGeometry: [fc, tc],
     },
   ];
 }
@@ -270,7 +237,6 @@ export const fetchRoutes = createAsyncThunk(
       primary.departureTimeIso = params.time || new Date().toISOString();
 
       const alts = (d.alternatives || []) as Record<string, unknown>[];
-      const altEndpoints = getRouteCoordinates(String(d.from), String(d.to));
       const altRoutes: Route[] = alts.map((alt) => ({
         id: String(alt.id),
         mode: 'Alt',
@@ -289,9 +255,6 @@ export const fetchRoutes = createAsyncThunk(
             instructions: String(alt.mode),
           },
         ],
-        fromCoords: altEndpoints.from,
-        toCoords: altEndpoints.to,
-        routeGeometry: [altEndpoints.from, altEndpoints.to],
       }));
 
       return [primary, ...altRoutes];

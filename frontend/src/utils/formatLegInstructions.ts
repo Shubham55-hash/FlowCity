@@ -28,11 +28,6 @@ export function formatLegInstructions(fromRaw: string, toRaw: string): string {
   return `${shortenPlaceLabel(from)} \u2192 ${shortenPlaceLabel(to)}`;
 }
 
-/** Compact route line for headings (origin → destination only, no ETA/confidence/risk). */
-export function formatRouteHeadline(fromRaw: string, toRaw: string): string {
-  return formatLegInstructions(fromRaw, toRaw);
-}
-
 export function splitLegInstruction(line: string): { from: string; to: string | null } {
   const parts = line.split(/\s*\u2192\s*|\s*->\s*/);
   if (parts.length < 2) return { from: line.trim(), to: null };

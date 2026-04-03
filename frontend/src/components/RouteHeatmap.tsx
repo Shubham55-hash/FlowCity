@@ -3,7 +3,10 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { motion } from "motion/react";
 import { generateRoutePoints, STATION_COORDINATES } from "../utils/stationCoordinates";
+<<<<<<< HEAD
 import { formatRouteHeadline } from "../utils/formatLegInstructions";
+=======
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
 
 interface RouteHeatmapProps {
   routes: any[];
@@ -252,7 +255,11 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
                   <p className="font-headline text-sm font-bold">
                     Route {index + 1}: {route.from} → {route.to}
                   </p>
+<<<<<<< HEAD
                   <p className="text-xs text-white/50 mt-1">{formatRouteHeadline(route.from, route.to)}</p>
+=======
+                  <p className="text-xs text-white/50 mt-1">{route.summary}</p>
+>>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                 </div>
                 <div className="text-right">
                   <div className="flex items-center gap-2 justify-end">

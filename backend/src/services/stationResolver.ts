@@ -1,5 +1,4 @@
 import stationsData from '../data/mumbaiStations.json';
-import { STATION_LATLNG } from '../data/stationLatLng';
 
 export interface StationInfo {
   name: string;
@@ -16,29 +15,6 @@ class StationResolver {
     this.stations.forEach(s => {
       this.cache.set(s.name.toLowerCase(), s.code);
     });
-  }
-
-  private haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-    const R = 6371;
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLng = ((lng2 - lng1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
-  /** Nearest known Mumbai station by road distance (for POIs / colleges not in the roster). */
-  public nearestStation(lat: number, lng: number): StationInfo | null {
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    let best: { info: StationInfo; d: number } | null = null;
-    for (const s of this.stations) {
-      const c = STATION_LATLNG[s.name];
-      if (!c) continue;
-      const d = this.haversineKm(lat, lng, c.lat, c.lng);
-      if (!best || d < best.d) best = { info: s, d };
-    }
-    return best?.info ?? null;
   }
 
    public resolve(name: string): string | null {
