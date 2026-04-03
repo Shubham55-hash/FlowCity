@@ -44,28 +44,56 @@ const initialState: JourneyState = {
 export const fetchRoutes = createAsyncThunk(
   'journey/fetchRoutes',
   async (params: any) => {
-    // MOCK: In production, call /api/journey/plan
-    await new Promise(res => setTimeout(res, 1000));
-    return [
-      {
-        id: 'R1', mode: 'Metro', from: params.from, to: params.to,
-        trustScore: 92, status: 'Safe', eta: 32, cost: 20, safetyRating: 95,
-        summary: 'Metro Line 1 + 5 min walk',
-        segments: [{ mode: 'Walk', duration: 5, instructions: 'Walk to Azad Nagar' }, { mode: 'Metro', duration: 27, instructions: 'Line 1 towards Ghatkopar' }]
-      },
-      {
-        id: 'R2', mode: 'Cab', from: params.from, to: params.to,
-        trustScore: 74, status: 'Moderate', eta: 45, cost: 250, safetyRating: 82,
-        summary: 'Direct Cab via Sea Link',
-        segments: [{ mode: 'Cab', duration: 45, instructions: 'Via Bandra-Worli Sea Link' }]
-      },
-      {
-        id: 'R3', mode: 'Bus', from: params.from, to: params.to,
-        trustScore: 55, status: 'Risky', eta: 70, cost: 15, safetyRating: 65,
-        summary: 'BEST Bus 202',
-        segments: [{ mode: 'Bus', duration: 70, instructions: 'Take 202 from Bus Depot' }]
-      }
-    ] as Route[];
+    const defaultApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    try {
+      const response = await axios.post(`${defaultApiUrl}/ghost-commute/simulate`, {
+        startLocation: { name: params.from, lat: 0, lng: 0 },
+        endLocation: { name: params.to, lat: 0, lng: 0 },
+        departureTime: new Date().toISOString(),
+        preferences: {
+          priority: params.preference ? params.preference.toLowerCase() : 'time',
+        }
+      });
+      
+      const sim = response.data;
+      
+      const optRoute = {
+        id: 'primary',
+        mode: sim.segments?.[0]?.type || 'Transit',
+        from: params.from || 'Origin',
+        to: params.to || 'Destination',
+        trustScore: sim.overallRisk === 'Low' ? 92 : sim.overallRisk === 'High' ? 45 : 75,
+        status: sim.overallRisk === 'Low' ? 'Safe' : sim.overallRisk === 'High' ? 'Risky' : 'Moderate',
+        eta: sim.totalTimeMin || 0,
+        cost: Math.round((sim.totalTimeMin || 30) * 1.5), 
+        safetyRating: sim.overallSafetyScore || 80,
+        summary: sim.summary || (sim.segments && sim.segments.map((s: any) => s.type).join(' + ')),
+        segments: sim.segments ? sim.segments.map((s: any) => ({
+          mode: s.type,
+          duration: s.predictedDurationMin,
+          instructions: `${s.from} to ${s.to}`
+        })) : []
+      };
+
+      const alts = (sim.alternatives || []).map((alt: any, i: number) => ({
+        id: `alt-${i}`,
+        mode: alt.label?.includes('Cab') ? 'Cab' : 'Bus',
+        from: params.from,
+        to: params.to,
+        trustScore: alt.confidence || 70,
+        status: (alt.safetyScore || 0) >= 80 ? 'Safe' : 'Moderate',
+        eta: alt.totalTimeMin || 0,
+        cost: alt.costScore || 50,
+        safetyRating: alt.safetyScore || 80,
+        summary: alt.label || 'Alternative',
+        segments: alt.legs ? alt.legs.map((l: string) => ({ mode: 'Transit', duration: alt.totalTimeMin, instructions: l })) : []
+      }));
+
+      return [optRoute, ...alts] as Route[];
+    } catch (error) {
+      console.error("Ghost Commute API Error:", error);
+      throw error;
+    }
   }
 );
 

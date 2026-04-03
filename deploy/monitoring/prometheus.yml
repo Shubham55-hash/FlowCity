@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+    app: flowcity
+
+# ── Alerting ──────────────────────────────────────────────────────────────────
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [] # add alertmanager:9093 when configured
+
+# ── Scrape configs ─────────────────────────────────────────────────────────────
+scrape_configs:
+
+  # Prometheus self-scrape
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # FlowCity Backend (Node.js /metrics endpoint)
+  - job_name: flowcity_backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:5000"]
+    scrape_interval: 10s
+
+  # PostgreSQL Exporter (optional — add postgres_exporter container)
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres_exporter:9187"]
+
+  # Redis Exporter (optional — add redis_exporter container)
+  - job_name: redis
+    static_configs:
+      - targets: ["redis_exporter:9121"]
+
+  # Node Exporter for host metrics
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100"]
