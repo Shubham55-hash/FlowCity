@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { RootState, AppDispatch, fetchRoutes, selectRoute, updateSearchParams } from '../store/journeySlice';
 
-const JourneyPlanner: React.FC = () => {
+const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) => {
   const dispatch = useDispatch<AppDispatch>();
   const { results, selectedRoute, loading, searchParams } = useSelector((state: RootState) => state.journey);
   const [isExpanded, setIsExpanded] = useState<string | null>(null);
@@ -191,7 +191,10 @@ const JourneyPlanner: React.FC = () => {
                              Platform 1 crowd density expected at 85%. Minor track signaling delay reported near Parel.
                            </p>
                         </div>
-                        <button className="bg-secondary text-surface font-headline font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:scale-[1.02] transition-transform">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); if(onNavigate) onNavigate(); }}
+                          className="bg-secondary text-surface font-headline font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:scale-[1.02] transition-transform"
+                        >
                           NAVIGATE NOW <Zap className="w-5 h-5 fill-surface" />
                         </button>
                       </div>

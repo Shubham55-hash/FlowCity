@@ -1,25 +1,62 @@
 
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'motion/react';
+import { io } from 'socket.io-client';
 import { 
   Clock, Zap, Shield, AlertTriangle, ChevronDown, 
   MapPin, Info, ArrowUpRight, CheckCircle2,
-  Train, Car, Footprints
+  Train, Car, Footprints, Bus, X, RefreshCw
 } from 'lucide-react';
-import { RootState, AppDispatch, tickSimulation, switchActiveRoute } from '../store/journeySlice';
+import { 
+  RootState, 
+  AppDispatch, 
+  tickSimulation, 
+  switchActiveRoute,
+  setAlert,
+  clearAlert
+} from '../store/journeySlice';
 
 const GhostCommuteView: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
-  const { selectedRoute, results, activeJourneyProgress, isSimulationRunning } = useSelector((state: RootState) => state.journey);
+  const { 
+    selectedRoute, 
+    results, 
+    activeJourneyProgress, 
+    isSimulationRunning,
+    activeAlert 
+  } = useSelector((state: RootState) => state.journey);
+
+  // Socket.io Connection
+  useEffect(() => {
+    if (!selectedRoute?.id) return;
+
+    const socket = io('http://localhost:5000');
+    
+    socket.emit('join_journey', selectedRoute.id);
+    console.log(`🔌 Connected to socket for journey: ${selectedRoute.id}`);
+
+    socket.on('RES_MODE_ALERT', (alert) => {
+      console.log('🚨 Rescue Alert Received:', alert);
+      dispatch(setAlert(alert));
+    });
+
+    socket.on('PLAN_UPDATED', (data) => {
+       console.log('✅ Plan Update Confirmed:', data);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [selectedRoute?.id, dispatch]);
 
   // Simulation Ticker
   useEffect(() => {
-    if (isSimulationRunning && activeJourneyProgress < 100) {
+    if (isSimulationRunning && activeJourneyProgress < 100 && !activeAlert) {
       const timer = setInterval(() => dispatch(tickSimulation()), 1000);
       return () => clearInterval(timer);
     }
-  }, [isSimulationRunning, activeJourneyProgress, dispatch]);
+  }, [isSimulationRunning, activeJourneyProgress, activeAlert, dispatch]);
 
   const timelineData = useMemo(() => {
     if (!selectedRoute) return [];
@@ -40,10 +77,122 @@ const GhostCommuteView: React.FC = () => {
     return 'bg-white/10';
   };
 
+  const handleRescueSwitch = (option: any) => {
+    // Map the backend option.route to the frontend Route type
+    const mappedRoute = {
+        id: option.id,
+        mode: 'Multi-Modal',
+        from: selectedRoute?.from || '',
+        to: selectedRoute?.to || '',
+        trustScore: option.safetyScore,
+        status: option.safetyScore > 80 ? 'Safe' : 'Moderate',
+        eta: option.route.totalTimeMin,
+        cost: option.costDiff > 0 ? 300 : 20,
+        safetyRating: option.safetyScore,
+        summary: option.label,
+        segments: option.route.segments.map((s: any) => ({
+            mode: s.type === 'walk' ? 'Walk' : s.type === 'local_train' ? 'Train' : 'Car',
+            duration: s.predictedDurationMin,
+            instructions: `${s.from} to ${s.to}`
+        }))
+    };
+    dispatch(switchActiveRoute(mappedRoute));
+  };
+
   if (!selectedRoute) return null;
 
   return (
-    <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-10 min-h-screen">
+    <div className="max-w-4xl mx-auto p-4 md:p-8 space-y-10 min-h-screen relative">
+      {/* Rescue Alert Overlay */}
+      <AnimatePresence>
+        {activeAlert && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-surface-bright/90 border-2 border-red-500/50 rounded-[2.5rem] p-8 max-w-2xl w-full shadow-2xl relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-1 bg-red-500/20">
+                 <motion.div 
+                    initial={{ width: "100%" }}
+                    animate={{ width: "0%" }}
+                    transition={{ duration: 60, ease: "linear" }}
+                    className="h-full bg-red-500"
+                 />
+              </div>
+
+              <div className="flex justify-between items-start mb-8">
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-2xl bg-red-500/20 flex items-center justify-center border border-red-500/30">
+                    <AlertTriangle className="w-8 h-8 text-red-500 animate-pulse" />
+                  </div>
+                  <div>
+                    <h2 className="text-3xl font-black font-headline uppercase tracking-tighter text-red-500">Rescue Mode Engaged</h2>
+                    <p className="text-white/60 text-sm font-medium">{activeAlert.disruption.description}</p>
+                  </div>
+                </div>
+                <button 
+                    onClick={() => dispatch(clearAlert())}
+                    className="p-2 hover:bg-white/5 rounded-full transition-colors"
+                >
+                    <X className="w-6 h-6 text-white/20" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                {activeAlert.options.map((opt: any) => (
+                  <motion.div 
+                    key={opt.id}
+                    whileHover={{ scale: 1.02 }}
+                    className={`p-6 rounded-3xl border-2 transition-all cursor-pointer ${opt.rank === 1 ? 'border-primary bg-primary/5' : 'border-white/5 bg-white/5'}`}
+                    onClick={() => handleRescueSwitch(opt)}
+                  >
+                    <div className="flex flex-col h-full justify-between">
+                      <div>
+                        <span className="block text-[10px] font-black uppercase tracking-widest text-white/30 mb-2">Option 0{opt.rank}</span>
+                        <h3 className="font-headline font-black text-xl mb-1 leading-tight">{opt.label}</h3>
+                        <p className="text-[10px] text-white/40 font-bold uppercase tracking-widest">
+                           {opt.timeImpactMin > 0 ? `+${opt.timeImpactMin}min` : `${opt.timeImpactMin}min`} vs Current
+                        </p>
+                      </div>
+                      
+                      <div className="mt-6 space-y-2">
+                        <div className="flex justify-between text-[9px] uppercase font-black">
+                           <span className="text-white/40">Reliability</span>
+                           <span className={opt.safetyScore > 80 ? 'text-secondary' : 'text-primary'}>{opt.safetyScore}%</span>
+                        </div>
+                        <div className="flex justify-between text-[9px] uppercase font-black">
+                           <span className="text-white/40">Est. Cost</span>
+                           <span className="text-secondary">₹{Math.round(opt.totalPredictedCost)}</span>
+                        </div>
+                        <div className="flex justify-between text-[7px] uppercase font-black">
+                           <span className={opt.costDiff < 0 ? 'text-secondary' : 'text-primary/60'}>
+                             {opt.costDiff > 0 ? `+₹${Math.round(opt.costDiff)} hike` : `₹${Math.abs(Math.round(opt.costDiff))} saved`}
+                           </span>
+                        </div>
+                      </div>
+                      
+                      <button className="w-full mt-6 py-3 bg-white/5 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-primary hover:text-surface transition-all">
+                        Select Path
+                      </button>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+
+              <p className="text-center text-[10px] font-black uppercase tracking-[0.3em] text-white/20">
+                Automatic fallback in 60s • Decision required immediately
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Simulation Master Header */}
       <motion.div 
         initial={{ opacity: 0, y: -20 }}
@@ -144,7 +293,7 @@ const GhostCommuteView: React.FC = () => {
             >
               <div className="flex items-center gap-4">
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${getStatusColor(activeJourneyProgress, seg.start, seg.end)}`}>
-                   {seg.mode === 'Metro' ? <Train className="w-5 h-5 text-surface" /> : seg.mode === 'Walk' ? <Footprints className="w-5 h-5 text-surface" /> : <Car className="w-5 h-5 text-surface" />}
+                   {seg.mode === 'Metro' ? <Train className="w-5 h-5 text-surface" /> : seg.mode === 'Wait' ? <Clock className="w-5 h-5 text-surface" /> : seg.mode === 'Walk' ? <Footprints className="w-5 h-5 text-surface" /> : seg.mode === 'Train' ? <Train className="w-5 h-5 text-surface" /> : seg.mode === 'Bus' ? <Bus className="w-5 h-5 text-surface" /> : <Car className="w-5 h-5 text-surface" />}
                 </div>
                 <div>
                    <p className="font-headline font-bold text-sm tracking-tight">{seg.instructions}</p>
@@ -156,10 +305,10 @@ const GhostCommuteView: React.FC = () => {
           ))}
         </div>
 
-        {/* Rescue Shield: Alternatives */}
+        {/* Alternatives & Disruption Status */}
         <div className="space-y-4">
            <h3 className="font-headline text-xs font-black uppercase tracking-[0.4em] text-red-400/60 px-2 flex items-center gap-2">
-            <Shield className="w-4 h-4 text-red-500 fill-red-500" /> Rescue Alternatives
+            <Shield className="w-4 h-4 text-red-500 fill-red-500" /> Active Rescue Shield
           </h3>
           <div className="space-y-3">
             {alternatives.map((alt) => (
@@ -170,7 +319,7 @@ const GhostCommuteView: React.FC = () => {
                 <div className="flex justify-between mb-4">
                    <div>
                      <span className="block text-lg font-headline font-black">{alt.summary}</span>
-                     <span className="text-xs text-white/40">Switch impact: <span className={alt.eta < selectedRoute.eta ? 'text-secondary font-bold' : 'text-white/60'}>{alt.eta - activeJourneyProgress}m left</span></span>
+                     <span className="text-xs text-white/40">Sync impact: <span className={alt.eta < selectedRoute.eta ? 'text-secondary font-bold' : 'text-white/60'}>{alt.eta} min journey</span></span>
                    </div>
                    <div className="text-right">
                       <span className="block text-lg font-headline font-black text-primary">₹ {alt.cost}</span>
@@ -183,25 +332,28 @@ const GhostCommuteView: React.FC = () => {
                   onClick={() => dispatch(switchActiveRoute(alt.id))}
                   className="w-full bg-white/5 group-hover:bg-primary group-hover:text-surface font-headline font-black text-[10px] uppercase py-3 rounded-xl transition-all tracking-[0.2em]"
                 >
-                  Switch Connection Now
+                  Reroute Option
                 </button>
               </div>
             ))}
           </div>
 
-          {/* Quick Context Card */}
-          <div className="bg-red-500/10 border border-red-500/20 p-5 rounded-3xl mt-6 relative overflow-hidden">
+          <motion.div 
+            animate={{ opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 4, repeat: Infinity }}
+            className="bg-red-500/10 border border-red-500/20 p-5 rounded-3xl mt-6 relative overflow-hidden"
+          >
              <div className="flex items-start gap-4 relative z-10">
-                <AlertTriangle className="w-6 h-6 text-red-500 animate-pulse shrink-0" />
+                <Shield className="w-6 h-6 text-red-500 shrink-0" />
                 <div>
-                   <span className="block text-red-500 font-headline font-black text-xs uppercase tracking-widest mb-1">Delay Hazard Zone</span>
+                   <span className="block text-red-500 font-headline font-black text-xs uppercase tracking-widest mb-1">Rescue Protocol Active</span>
                    <p className="text-xs text-red-200/60 leading-relaxed font-medium">
-                     Track signaling disruption reported near Lower Parel. Probability of missing next transit connection at Dadar Junction is <span className="text-red-400 font-black">24%</span>.
+                     Monitoring your flow for real-time disruptions. Rescue Mode will engage automatically if a delay spike is detected.
                    </p>
                 </div>
              </div>
              <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 blur-3xl rounded-full" />
-          </div>
+          </motion.div>
         </div>
       </div>
     </div>

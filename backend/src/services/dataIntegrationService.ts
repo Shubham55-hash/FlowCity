@@ -78,19 +78,40 @@ class DataIntegrationService extends EventEmitter {
 
   private async pollTransitData() {
     try {
-      // 1. Fetch GTFS-RT Protobuf (BEST Bus)
-      // 2. Fetch IRCTC Status (RapidAPI)
-      // 3. Normalize & Update Cache
-      const mockTransit: TransitInfo = {
-        routeId: 'VR-DDR-1',
-        delayMin: Math.floor(Math.random() * 15),
-        status: 'Normal',
-        source: 'GTFS-RT',
-        lastUpdated: Date.now()
-      };
+      const apiKey = process.env.IRCTC_API_KEY;
+      const baseUrl = process.env.IRCTC_API_BASE_URL || 'https://irctc1.p.rapidapi.com';
+      const apiHost = process.env.IRCTC_API_HOST || 'irctc1.p.rapidapi.com';
+      const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
 
-      this.cacheData('transit:VR-DDR-1', mockTransit, 60000);
-      this.emit('dataUpdated', { type: 'transit', data: mockTransit });
+      if (apiKey && apiKey !== 'your_irctc_api_key_here') {
+        const resp = await axios.get(`${baseUrl}/api/v3/trainsList`, {
+          params: { fromStationCode: 'CSTM', toStationCode: 'DDR', dateOfJourney: today, classType: 'SL', quota: 'GN' },
+          headers: {
+            'X-RapidAPI-Key': apiKey,
+            'X-RapidAPI-Host': apiHost
+          }
+        });
+        
+        const transit: TransitInfo = {
+          routeId: 'VR-DDR-1',
+          delayMin: resp.data?.delay || 0,
+          status: (resp.data?.delay || 0) > 15 ? 'Delayed' : 'Normal',
+          source: 'IRCTC-RT',
+          lastUpdated: Date.now()
+        };
+        this.cacheData('transit:VR-DDR-1', transit, 60000);
+        this.emit('dataUpdated', { type: 'transit', data: transit });
+      } else {
+        // Fallback for missing key
+        const mockTransit: TransitInfo = {
+          routeId: 'VR-DDR-1',
+          delayMin: Math.floor(Math.random() * 5),
+          status: 'Normal',
+          source: 'System-Mock',
+          lastUpdated: Date.now()
+        };
+        this.cacheData('transit:VR-DDR-1', mockTransit, 60000);
+      }
     } catch (err) {
       console.error('Transit Polling Error:', err);
     }
@@ -98,18 +119,28 @@ class DataIntegrationService extends EventEmitter {
 
   private async pollWeatherData() {
     try {
-      const apiKey = process.env.OPENWEATHERMAP_API_KEY;
-      let weather: WeatherInfo;
+      const enableWeather = process.env.ENABLE_WEATHER === 'true';
+      if (!enableWeather) return;
 
-      if (apiKey) {
-        const resp = await axios.get(`https://api.openweathermap.org/data/2.5/weather?q=Mumbai&appid=${apiKey}`);
-        weather = this.normalizeWeather(resp.data);
-      } else {
-        weather = { 
-          temp: 28, condition: 'Clear', isAdverse: false, 
-          delayImpact: 0, lastUpdated: Date.now() 
-        };
-      }
+      // Using Open-Meteo (Free, No-Key) for Mumbai
+      const resp = await axios.get('https://api.open-meteo.com/v1/forecast', {
+        params: {
+          latitude: 19.0760,
+          longitude: 72.8777,
+          current_weather: true
+        }
+      });
+
+      const current = resp.data.current_weather;
+      const isAdverse = current.weathercode > 50; // Simple heuristic (Rain/Storm)
+      
+      const weather: WeatherInfo = { 
+        temp: current.temperature, 
+        condition: `Code: ${current.weathercode}`, 
+        isAdverse, 
+        delayImpact: isAdverse ? 15 : 0, 
+        lastUpdated: Date.now() 
+      };
 
       this.cacheData('weather:mumbai', weather, 900000);
       this.emit('dataUpdated', { type: 'weather', data: weather });

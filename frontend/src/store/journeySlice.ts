@@ -29,6 +29,7 @@ interface JourneyState {
   loading: boolean;
   error: string | null;
   searchParams: { from: string; to: string; time: string; preference: string };
+  activeAlert: any | null;
 }
 
 const initialState: JourneyState = {
@@ -38,60 +39,83 @@ const initialState: JourneyState = {
   isSimulationRunning: false,
   loading: false,
   error: null,
-  searchParams: { from: '', to: '', time: '', preference: 'Safety' }
+  searchParams: { from: '', to: '', time: '', preference: 'Safety' },
+  activeAlert: null
 };
 
 export const fetchRoutes = createAsyncThunk(
   'journey/fetchRoutes',
   async (params: any) => {
-    const defaultApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
     try {
-      const response = await axios.post(`${defaultApiUrl}/ghost-commute/simulate`, {
-        startLocation: { name: params.from, lat: 0, lng: 0 },
-        endLocation: { name: params.to, lat: 0, lng: 0 },
-        departureTime: new Date().toISOString(),
-        preferences: {
-          priority: params.preference ? params.preference.toLowerCase() : 'time',
-        }
-      });
-      
-      const sim = response.data;
-      
-      const optRoute = {
-        id: 'primary',
-        mode: sim.segments?.[0]?.type || 'Transit',
-        from: params.from || 'Origin',
-        to: params.to || 'Destination',
-        trustScore: sim.overallRisk === 'Low' ? 92 : sim.overallRisk === 'High' ? 45 : 75,
-        status: sim.overallRisk === 'Low' ? 'Safe' : sim.overallRisk === 'High' ? 'Risky' : 'Moderate',
-        eta: sim.totalTimeMin || 0,
-        cost: Math.round((sim.totalTimeMin || 30) * 1.5), 
-        safetyRating: sim.overallSafetyScore || 80,
-        summary: sim.summary || (sim.segments && sim.segments.map((s: any) => s.type).join(' + ')),
-        segments: sim.segments ? sim.segments.map((s: any) => ({
-          mode: s.type,
-          duration: s.predictedDurationMin,
-          instructions: `${s.from} to ${s.to}`
-        })) : []
-      };
-
-      const alts = (sim.alternatives || []).map((alt: any, i: number) => ({
-        id: `alt-${i}`,
-        mode: alt.label?.includes('Cab') ? 'Cab' : 'Bus',
+      const response = await axios.post('http://localhost:5000/api/journey/plan', {
         from: params.from,
         to: params.to,
-        trustScore: alt.confidence || 70,
-        status: (alt.safetyScore || 0) >= 80 ? 'Safe' : 'Moderate',
-        eta: alt.totalTimeMin || 0,
-        cost: alt.costScore || 50,
-        safetyRating: alt.safetyScore || 80,
-        summary: alt.label || 'Alternative',
-        segments: alt.legs ? alt.legs.map((l: string) => ({ mode: 'Transit', duration: alt.totalTimeMin, instructions: l })) : []
+        time: params.time || new Date().toISOString(),
+        preferences: { priority: params.preference?.toLowerCase() || 'safety' }
+      });
+
+      const mainData = response.data.data;
+      const sim = mainData.simulationDetails;
+
+      const mapMode = (type: string) => {
+        if (!type) return 'Car';
+        if (type === 'local_train') return 'Train';
+        if (type === 'metro') return 'Metro';
+        if (type === 'bus') return 'Bus';
+        if (type === 'walk') return 'Walk';
+        return 'Car';
+      };
+
+      const mainRoute: Route = {
+        id: mainData.id,
+        mode: mainData.mode,
+        from: mainData.from,
+        to: mainData.to,
+        trustScore: mainData.trustScore,
+        status: mainData.status,
+        eta: mainData.eta,
+        cost: mainData.cost || 0,
+        safetyRating: sim?.overallSafetyScore || mainData.trustScore,
+        summary: sim?.summary || `${mainData.mode} journey`,
+        segments: (() => {
+          const segs: any[] = [];
+          (sim?.segments || []).forEach((s: any) => {
+            if (s.waitTimeMin && s.waitTimeMin > 0) {
+              segs.push({
+                mode: 'Wait',
+                duration: s.waitTimeMin,
+                instructions: `Wait for ${mapMode(s.type)} at ${s.from}`
+              });
+            }
+            segs.push({
+              mode: mapMode(s.type),
+              duration: s.predictedDurationMin,
+              instructions: `${s.from} to ${s.to}`
+            });
+          });
+          return segs;
+        })()
+      };
+
+      const alternatives: Route[] = (mainData.alternatives || []).map((alt: any) => ({
+        id: alt.id,
+        mode: alt.mode || alt.label,
+        from: mainData.from,
+        to: mainData.to,
+        trustScore: alt.trustScore || alt.safetyScore || 80,
+        status: (alt.trustScore || alt.safetyScore) > 80 ? 'Safe' : 'Moderate',
+        eta: alt.eta || alt.totalTimeMin,
+        cost: alt.predictedCost || 0,
+        safetyRating: alt.trustScore || alt.safetyScore || 80,
+        summary: alt.label || alt.mode,
+        segments: Array.isArray(alt.legs) 
+          ? alt.legs.map((l: string) => ({ mode: 'Multi', duration: 0, instructions: l }))
+          : [{ mode: 'Multi', duration: alt.eta || alt.totalTimeMin, instructions: 'Direct route' }]
       }));
 
-      return [optRoute, ...alts] as Route[];
+      return [mainRoute, ...alternatives];
     } catch (error) {
-      console.error("Ghost Commute API Error:", error);
+      console.error('API Error:', error);
       throw error;
     }
   }
@@ -105,21 +129,37 @@ const journeySlice = createSlice({
       state.selectedRoute = action.payload;
       state.activeJourneyProgress = 0;
       state.isSimulationRunning = !!action.payload;
+      state.activeAlert = null;
     },
     tickSimulation: (state) => {
       if (state.isSimulationRunning && state.activeJourneyProgress < 100) {
         state.activeJourneyProgress += 1;
       }
     },
-    switchActiveRoute: (state, action: PayloadAction<string>) => {
-      const newRoute = state.results.find(r => r.id === action.payload);
-      if (newRoute) {
-        state.selectedRoute = newRoute;
-        state.activeJourneyProgress = Math.min(state.activeJourneyProgress, 80);
+    switchActiveRoute: (state, action: PayloadAction<any>) => {
+      // action.payload can be a string (ID) or a full route object from rescue alert
+      if (typeof action.payload === 'string') {
+        const newRoute = state.results.find(r => r.id === action.payload);
+        if (newRoute) {
+          state.selectedRoute = newRoute;
+        }
+      } else {
+        // From Rescue Mode Option
+        state.selectedRoute = action.payload;
       }
+      
+      // When switching due to rescue, we usually drop progress slightly to account for the new leg
+      state.activeJourneyProgress = Math.max(0, Math.min(state.activeJourneyProgress, 85));
+      state.activeAlert = null;
     },
     updateSearchParams: (state, action: PayloadAction<any>) => {
       state.searchParams = { ...state.searchParams, ...action.payload };
+    },
+    setAlert: (state, action: PayloadAction<any>) => {
+      state.activeAlert = action.payload;
+    },
+    clearAlert: (state) => {
+      state.activeAlert = null;
     }
   },
   extraReducers: (builder) => {
@@ -128,6 +168,11 @@ const journeySlice = createSlice({
       .addCase(fetchRoutes.fulfilled, (state, action) => {
         state.loading = false;
         state.results = action.payload;
+        if (action.payload.length > 0) {
+          state.selectedRoute = action.payload[0];
+          state.activeJourneyProgress = 0;
+          state.isSimulationRunning = true;
+        }
       })
       .addCase(fetchRoutes.rejected, (state) => {
         state.loading = false;
@@ -136,7 +181,7 @@ const journeySlice = createSlice({
   }
 });
 
-export const { selectRoute, updateSearchParams, tickSimulation, switchActiveRoute } = journeySlice.actions;
+export const { selectRoute, updateSearchParams, tickSimulation, switchActiveRoute, setAlert, clearAlert } = journeySlice.actions;
 
 export const store = configureStore({
   reducer: {

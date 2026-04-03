@@ -1,5 +1,7 @@
 {
-  "startLocation": { "name": "Borivali" },
-  "endLocation": { "name": "Andheri" },
-  "preferences": { "priority": "time" }
+  "from": "Bandra",
+  "to": "Churchgate",
+  "preferences": {
+    "priority": "safety"
+  }
 }

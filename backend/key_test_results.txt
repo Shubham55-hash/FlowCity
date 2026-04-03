@@ -1,0 +1,9 @@
+﻿--- Testing API Keys ---
+GOOGLE_MAPS_API_KEY: Present
+OPENROUTE_API_KEY: Present
+IRCTC_API_KEY: Present
+GEOAPIFY_API_KEY: Present
+Testing Geoapify... Γ£à Working
+Testing OpenRouteService... Γ£à Working
+Testing Google Maps... Γ£à Working (Status: REQUEST_DENIED)
+Testing IRCTC (RapidAPI)... Γ¥î Failed: 403

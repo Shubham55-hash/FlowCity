@@ -58,7 +58,7 @@ const ActionTile = ({ icon: Icon, title, subtitle, active = false, onClick }: an
 const FlowView = ({ score, selectedRoute, onGhostClick, onSafetyMapClick, onRescueClick, onHistoryClick }: any) => (
   <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
     <section className="flex flex-col items-center justify-center pt-4">
-      <TrustScore score={score} />
+      <TrustScore score={selectedRoute?.trustScore || score} />
       <p className="mt-4 text-center text-white/60 font-medium text-sm max-w-[240px]">Your kinetic flow is optimized for peak efficiency tonight.</p>
     </section>
 
@@ -157,7 +157,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="relative z-10 pt-28 pb-36 px-6 max-w-lg mx-auto">
+      <main className="relative z-10 pt-28 pb-48 px-4 md:px-8 max-w-lg md:max-w-4xl mx-auto w-full">
         <AnimatePresence mode="wait">
           {view === 'flow' && (
             <FlowView 
@@ -172,7 +172,7 @@ export default function App() {
           )}
           {view === 'ghost' && <GhostCommuteView key="ghost" />}
           {view === 'safety-map' && <div className="py-20 text-center uppercase tracking-widest text-white/20">Safety Grid Analysis Active</div>}
-          {view === 'plan' && <JourneyPlanner key="plan" />}
+          {view === 'plan' && <JourneyPlanner key="plan" onNavigate={() => setView('flow')} />}
           {view === 'history' && <CommuteReplayDashboard key="history" />}
           {view === 'alerts' && <AlertsView key="alerts" />}
         </AnimatePresence>

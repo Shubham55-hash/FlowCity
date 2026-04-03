@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   BarChart3, TrendingUp, Clock, CreditCard, 
@@ -28,31 +29,21 @@ const CommuteReplayDashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // MOCK: In production, fetch from /api/history/stats & /api/history/insights
-    setTimeout(() => {
-      setStats({
-        avgDelay: 8.5,
-        reliabilityByRoute: [
-          { route: 'Borivali → BKC', score: 85 },
-          { route: 'Andheri → Dadar', score: 91 },
-          { route: 'Colaba → Worli', score: 64 }
-        ],
-        peakHourAnalysis: [
-          { hour: 8, delay: 5 }, { hour: 9, delay: 12 }, { hour: 10, delay: 8 },
-          { hour: 17, delay: 15 }, { hour: 18, delay: 20 }, { hour: 19, delay: 10 }
-        ],
-        patterns: ['Always late on Fridays (avg +15m)', 'Morning commutes are 30% more reliable than evening.'],
-        costTrend: [
-          { date: 'Mar 27', amount: 120 }, { date: 'Mar 28', amount: 150 },
-          { date: 'Mar 29', amount: 95 }, { date: 'Mar 30', amount: 110 }
-        ]
-      });
-      setRecommendations([
-        { type: 'Time', title: 'Optimal Departure', suggestion: 'Leaving at 8:15 AM reduces your expected delay by 40%.', impact: 'High' },
-        { type: 'Cost', title: 'Eco-Efficiency', suggestion: 'Switching to Metro on Tuesdays saves ₹450 monthly.', impact: 'Medium' }
-      ]);
-      setLoading(false);
-    }, 1500);
+    const fetchData = async () => {
+      try {
+        const [statsRes, recsRes] = await Promise.all([
+          axios.get('http://localhost:5000/api/history/stats'),
+          axios.get('http://localhost:5000/api/history/insights')
+        ]);
+        setStats(statsRes.data);
+        setRecommendations(recsRes.data);
+      } catch (err) {
+        console.error('Failed to fetch dashboard intelligence:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
   }, []);
 
   if (loading) {
