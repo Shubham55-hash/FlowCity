@@ -33,6 +33,7 @@ export interface Route {
   cost: number;
   safetyRating: number;
   summary: string;
+  riskFactors?: string;
   segments: RouteSegment[];
   fromCoords?: { lat: number; lng: number };
   toCoords?: { lat: number; lng: number };
@@ -45,22 +46,26 @@ export interface Route {
 const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 function mapLegType(t: string): string {
-  switch (t) {
-    case 'walk':
-      return 'Walk';
-    case 'local_train':
-      return 'Train';
-    case 'metro':
-      return 'Metro';
-    case 'bus':
-      return 'Bus';
-    case 'cab':
-      return 'Cab';
-    case 'auto':
-      return 'Auto';
-    default:
-      return 'Transit';
-  }
+  const lower = t.toLowerCase();
+  if (lower.includes('local_train') || lower.includes('train')) return 'Train';
+  if (lower.includes('metro')) return 'Metro';
+  if (lower.includes('bus')) return 'Bus';
+  if (lower.includes('cab') || lower.includes('auto')) return 'Cab';
+  if (lower.includes('walk')) return 'Walk';
+  return 'Transit';
+}
+
+/** Maps an alternative route label from the backend into a UI mode string */
+function mapAltLabel(label: string): string {
+  const l = label.toLowerCase();
+  if (l.includes('uber')) return 'Uber';
+  if (l.includes('ola')) return 'Ola';
+  if (l.includes('rapido') || l.includes('bike')) return 'Rapido';
+  if (l.includes('train') || l.includes('express') || l.includes('earlier')) return 'Train';
+  if (l.includes('metro')) return 'Metro';
+  if (l.includes('bus')) return 'Bus';
+  if (l.includes('walk')) return 'Walk';
+  return 'Cab';
 }
 
 function routeFromSimulation(
@@ -72,6 +77,7 @@ function routeFromSimulation(
   eta: number,
   cost: number,
   summary: string,
+  riskFactors: string | undefined,
   simulation: Record<string, unknown>
 ): Route {
   const segmentsRaw = simulation.segments as Record<string, unknown>[] | undefined;
@@ -101,7 +107,7 @@ function routeFromSimulation(
 
   return {
     id,
-    mode: mapLegType(String(segmentsRaw?.[0]?.type ?? 'metro')),
+    mode: mapLegType(String(segmentsRaw?.find((s: any) => s.type !== 'walk' && s.type !== 'Wait')?.type ?? segmentsRaw?.[0]?.type ?? 'local_train')),
     from,
     to,
     trustScore,
@@ -110,6 +116,7 @@ function routeFromSimulation(
     cost,
     safetyRating: trustScore,
     summary,
+    riskFactors,
     segments,
     fromCoords,
     toCoords,
@@ -139,6 +146,7 @@ export function mapSimulationToRoute(
     Number(simulation.totalTimeMin ?? 0),
     Math.round(Number(simulation.totalPredictedCost ?? 0)),
     String(simulation.summary ?? 'Route'),
+    undefined, // riskFactors only populated from root API response, skipped here or passed as undefined
     simulation
   );
 }
@@ -179,6 +187,7 @@ function mockRoutes(params: { from: string; to: string }): Route[] {
       cost: 20,
       safetyRating: 95,
       summary: 'Offline preview — start backend for live simulation',
+      riskFactors: 'Running in offline preview mode. No live risk data available.',
       segments: [
         { mode: 'Walk', duration: 5, instructions: 'Walk to station' },
         { mode: 'Metro', duration: 27, instructions: 'Metro towards destination' },
@@ -232,30 +241,36 @@ export const fetchRoutes = createAsyncThunk(
         Number(d.eta),
         Number(d.cost),
         String(sim.summary || d.summary || 'Journey'),
+        d.riskFactors as string | undefined,
         sim
       );
       primary.departureTimeIso = params.time || new Date().toISOString();
 
       const alts = (d.alternatives || []) as Record<string, unknown>[];
-      const altRoutes: Route[] = alts.map((alt) => ({
-        id: String(alt.id),
-        mode: 'Alt',
-        from: String(d.from),
-        to: String(d.to),
-        trustScore: Number(alt.trustScore),
-        status: Number(alt.trustScore) >= 75 ? 'Moderate' : 'Risky',
-        eta: Number(alt.eta),
-        cost: Number(alt.predictedCost),
-        safetyRating: Number(alt.trustScore),
-        summary: String(alt.mode),
-        segments: [
-          {
-            mode: 'Transit',
-            duration: Number(alt.eta),
-            instructions: String(alt.mode),
-          },
-        ],
-      }));
+      const altRoutes: Route[] = alts.map((alt) => {
+        const rawLabel = String(alt.mode || alt.label || 'Cab');
+        const mappedMode = mapAltLabel(rawLabel);
+        return {
+          id: String(alt.id),
+          mode: mappedMode,
+          from: String(d.from),
+          to: String(d.to),
+          trustScore: Number(alt.trustScore),
+          status: Number(alt.trustScore) >= 75 ? 'Moderate' : 'Risky',
+          eta: Number(alt.eta),
+          cost: Number(alt.predictedCost),
+          safetyRating: Number(alt.trustScore),
+          summary: rawLabel,
+          riskFactors: undefined,
+          segments: [
+            {
+              mode: mappedMode,
+              duration: Number(alt.eta),
+              instructions: rawLabel,
+            },
+          ],
+        } as Route;
+      });
 
       return [primary, ...altRoutes];
     } catch (err: unknown) {

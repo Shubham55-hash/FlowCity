@@ -12,9 +12,10 @@ import CommuteReplayDashboard from "./components/CommuteReplayDashboard";
 import RouteHeatmap from "./components/RouteHeatmap";
 import RescueShieldView from "./components/RescueShieldView";
 import RescueAlertOverlay from "./components/RescueAlertOverlay";
-import { RootState, AppDispatch, setAlert } from "./store/journeySlice";
+import NavigationView from "./components/NavigationView";
+import { Route, RootState, AppDispatch, setAlert } from "./store/journeySlice";
 
-type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'plan' | 'history' | 'heatmap';
+type View = 'flow' | 'routes' | 'alerts' | 'profile' | 'ghost' | 'plan' | 'history' | 'heatmap' | 'navigate';
 
 /** Tall amber-glass panel inspired by showcase tiles: center hero glyph, corner badge, copy anchored low. */
 const FeaturePanel = ({ icon: Icon, title, subtitle, active = false, onClick }: any) => (
@@ -150,6 +151,7 @@ export default function App() {
   const { selectedRoute, results: allRoutes } = useSelector((state: RootState) => state.journey);
   
   const [view, setView] = useState<View>('flow');
+  const [navigatingRoute, setNavigatingRoute] = useState<Route | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
@@ -239,13 +241,16 @@ export default function App() {
           {view === 'ghost' && (
             <GhostCommuteView key="ghost" onBack={() => setView('flow')} />
           )}
-          {view === 'plan' && <JourneyPlanner key="plan" onNavigate={() => setView('flow')} />}
+          {view === 'plan' && <JourneyPlanner key="plan" onNavigate={() => setView('flow')} onNavigateRoute={(r) => { setNavigatingRoute(r); setView('navigate'); }} />}
           {view === 'history' && <CommuteReplayDashboard key="history" onOpenPlan={() => setView('plan')} />}
           {view === 'alerts' && <RescueShieldView key="alerts" />}
           {view === 'heatmap' && (
             <div key="heatmap" className="w-full">
               <RouteHeatmap routes={allRoutes && allRoutes.length > 0 ? allRoutes : selectedRoute ? [selectedRoute] : []} selectedRoute={selectedRoute} />
             </div>
+          )}
+          {view === 'navigate' && navigatingRoute && (
+            <NavigationView route={navigatingRoute} onBack={() => setView('plan')} />
           )}
         </AnimatePresence>
       </main>

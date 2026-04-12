@@ -18,12 +18,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import GhostRouteMap from './GhostRouteMap';
-<<<<<<< HEAD
 import { splitLegInstruction, formatRouteHeadline } from '../utils/formatLegInstructions';
-import { getRouteCoordinates } from '../utils/stationCoordinates';
-=======
-import { splitLegInstruction } from '../utils/formatLegInstructions';
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
+import { getStationCoordinates, getRouteCoordinates, getRailwayPath } from '../utils/stationCoordinates';
 import {
   RootState,
   AppDispatch,
@@ -31,36 +27,65 @@ import {
   resetSimulationProgress,
   switchActiveRoute,
   type Route,
+  type RouteSegment,
 } from '../store/journeySlice';
 
-/** Prefer full geometry; else segment endpoints; else straight line from journey endpoints. */
+type SegmentPath = { mode: string; points: Array<{ lat: number; lng: number }>; label?: string };
+
+/**
+ * Build per-leg segment paths for the multi-colored map.
+ * For train/metro legs, we thread the route through actual station waypoints.
+ * Walk and cab legs use start/end points; OSRM will fetch real road geometry.
+ */
+function buildMapSegments(route: Route): SegmentPath[] {
+  if (!route.segments?.length) return [];
+
+  return route.segments
+    .filter(seg => seg.mode !== 'Wait')
+    .map((seg) => {
+      const from = seg.fromLatLng;
+      const to   = seg.toLatLng;
+
+      // For train/metro legs, build full railway corridor path
+      const mode = (seg.mode ?? '').toLowerCase();
+      if (mode.includes('train') || mode.includes('metro')) {
+        // Parse station names from instructions e.g. "Andheri Station → Virar Station"
+        const match = seg.instructions?.match(/([\w\s]+?) Station.*?\u2192.*?([\w\s]+?) Station/);
+        if (match) {
+          const fromStnName = match[1].trim();
+          const toStnName   = match[2].trim();
+          const railPath = getRailwayPath(fromStnName, toStnName);
+          if (railPath.length >= 2) {
+            return { mode: seg.mode, points: railPath, label: seg.instructions };
+          }
+          // Fallback: just use the two endpoints
+          const fromStn = getStationCoordinates(fromStnName);
+          const toStn   = getStationCoordinates(toStnName);
+          if (fromStn && toStn) {
+            return { mode: seg.mode, points: [fromStn, toStn], label: seg.instructions };
+          }
+        }
+      }
+
+      // Default: use fromLatLng/toLatLng from segment detail, else fall back to route endpoints
+      const fallbackFrom = route.fromCoords || getRouteCoordinates(route.from, route.to).from;
+      const fallbackTo   = route.toCoords   || getRouteCoordinates(route.from, route.to).to;
+
+      return {
+        mode: seg.mode,
+        label: seg.instructions,
+        points: [from ?? fallbackFrom, to ?? fallbackTo],
+      };
+    });
+}
+
+/** Legacy single-path (for fallback when no segments exist) */
 function resolveRoutePathForMap(route: Route): Array<{ lat: number; lng: number }> {
   const geom = route.routeGeometry;
   if (geom && geom.length >= 2) return geom;
-
-  const pts: Array<{ lat: number; lng: number }> = [];
-  for (const s of route.segments ?? []) {
-    if (s.fromLatLng) pts.push(s.fromLatLng);
-    if (s.toLatLng) pts.push(s.toLatLng);
-  }
-  const dedup: typeof pts = [];
-  for (const p of pts) {
-    const prev = dedup[dedup.length - 1];
-    if (!prev || prev.lat !== p.lat || prev.lng !== p.lng) dedup.push(p);
-  }
-  if (dedup.length >= 2) return dedup;
-
-  if (route.fromCoords && route.toCoords) {
-    return [route.fromCoords, route.toCoords];
-  }
-<<<<<<< HEAD
-  if (route.from?.trim() && route.to?.trim()) {
-    const { from, to } = getRouteCoordinates(route.from, route.to);
-    return [from, to];
-  }
-=======
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
-  return [];
+  if (route.fromCoords && route.toCoords) return [route.fromCoords, route.toCoords];
+  const { from, to } = getRouteCoordinates(route.from, route.to);
+  return [from, to];
 }
 
 const socketBase = () => import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || 'http://localhost:5000';
@@ -213,17 +238,10 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                   ))}
                 </div>
                 <h2 className="font-headline text-base font-black uppercase leading-snug tracking-tight text-white/95 md:text-lg">
-<<<<<<< HEAD
                   {formatRouteHeadline(selectedRoute.from, selectedRoute.to)}
                 </h2>
                 <p className="mt-2 text-sm tabular-nums text-white/55">
                   ~{selectedRoute.eta} min · <span className="text-primary/90">₹{selectedRoute.cost}</span>
-=======
-                  {selectedRoute.summary}
-                </h2>
-                <p className="mt-2 text-sm tabular-nums text-white/45">
-                  ~{selectedRoute.eta} min · ₹{selectedRoute.cost}
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                 </p>
               </div>
               <div className="text-left md:text-right">
@@ -238,7 +256,6 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
               <p className="mb-3 text-[10px] font-black uppercase tracking-[0.35em] text-white/35">
                 Confidence band (by leg)
               </p>
-<<<<<<< HEAD
               <div className="relative h-28 w-full">
                 <svg className="h-full w-full overflow-visible" viewBox="0 0 100 56" preserveAspectRatio="none">
                   {bandPathD && (
@@ -281,44 +298,6 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                   style={{ left: `${activeJourneyProgress}%`, top: `${(40 / 56) * 100}%` }}
                 />
               </div>
-=======
-              <svg className="h-28 w-full overflow-visible" viewBox="0 0 100 56" preserveAspectRatio="none">
-                {bandPathD && (
-                  <path d={bandPathD} className="fill-primary/10 stroke-none" vectorEffect="non-scaling-stroke" />
-                )}
-                <line x1="0" y1="40" x2="100" y2="40" stroke="rgba(255,255,255,0.08)" strokeWidth="0.35" strokeLinecap="round" />
-                <motion.line
-                  x1="0"
-                  y1="40"
-                  x2={activeJourneyProgress}
-                  y2="40"
-                  className="stroke-primary"
-                  strokeWidth="0.45"
-                  strokeLinecap="round"
-                  style={{ filter: 'drop-shadow(0 0 3px rgba(255,191,0,0.5))' }}
-                />
-                {timelineData.map((seg, i) => (
-                  <g key={i}>
-                    <circle
-                      cx={pctAt(seg.end)}
-                      cy={40}
-                      r={1.1}
-                      className={
-                        activeJourneyProgress >= pctAt(seg.end)
-                          ? 'fill-secondary stroke-white/30'
-                          : 'fill-[#393939] stroke-white/20'
-                      }
-                      strokeWidth="0.25"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  </g>
-                ))}
-                <g transform={`translate(${activeJourneyProgress}, 40)`}>
-                  <circle r={2.2} cy={0} className="fill-primary/35 blur-sm" />
-                  <circle r={1.2} cy={0} className="fill-[#131313] stroke-primary" strokeWidth="0.35" />
-                </g>
-              </svg>
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
               <div className="mt-2 flex justify-between px-0.5">
                 {tickLabels.map(({ m, pct }) => (
                   <span key={pct} className="text-[10px] font-bold uppercase tracking-widest text-white/30">
@@ -445,13 +424,9 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
                   >
                     <div className="mb-4 flex justify-between gap-4">
                       <div className="min-w-0">
-<<<<<<< HEAD
                         <span className="block font-headline text-lg font-black">
                           {formatRouteHeadline(alt.from, alt.to)}
                         </span>
-=======
-                        <span className="block font-headline text-lg font-black">{alt.summary}</span>
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                         <span className="text-xs text-white/40">
                           Journey{' '}
                           <span
@@ -513,9 +488,11 @@ const GhostCommuteView: React.FC<GhostCommuteViewProps> = ({ onBack }) => {
               Route on map
             </h3>
             <GhostRouteMap
+              segments={buildMapSegments(selectedRoute)}
               path={resolveRoutePathForMap(selectedRoute)}
               fromLabel={selectedRoute.from}
               toLabel={selectedRoute.to}
+              progress={activeJourneyProgress}
             />
           </div>
         </aside>

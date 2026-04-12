@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { createServer } from 'http';
 import { socketService } from './services/socketService';
 import { trustScoreService } from './services/trustScoreService';
@@ -8,8 +8,6 @@ import { safetyService } from './services/safetyService';
 import router from './routes';
 import { apiRateLimiter } from './middleware/rateLimiter';
 import { errorHandler } from './middleware/errorHandler';
-
-dotenv.config();
 
 // ── CORS: driven by ALLOWED_ORIGINS env var ──────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')

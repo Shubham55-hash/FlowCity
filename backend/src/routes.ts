@@ -22,6 +22,7 @@ router.post('/auth/logout', authenticate as any, AuthController.logout);
 
 // ── JOURNEY PLANNING ROUTES ──────────────────────────────────────────────────
 router.post('/journey/plan', validate(schemas.journey.plan), JourneyController.plan);
+router.post('/journey/verify-fares', JourneyController.verifyFares);
 router.get('/journey/:id', authenticate as any, JourneyController.getActive);
 router.post('/journey/:id/update', authenticate as any, JourneyController.updateStatus);
 

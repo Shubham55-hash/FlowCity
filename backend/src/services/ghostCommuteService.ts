@@ -18,6 +18,7 @@ import axios, { AxiosInstance } from 'axios';
 import { stationResolver } from './stationResolver';
 import { geocoderService, Coordinates } from './geocoderService';
 import { safetyService } from './safetyService';
+import { localTrainFare, metroFare, busFare } from './priceVerifier';
 import { apiRateLimiter } from '../middleware/rateLimiter';
 
 // ──────────────── Env helpers ─────────────────────────────────────────────────
@@ -368,7 +369,7 @@ class GhostCommuteService {
     departureTime: Date
   ): Promise<ORSDirectionsResult | null> {
     const googleKey = env('GOOGLE_MAPS_API_KEY');
-    if (!googleKey || googleKey === 'your_google_api_key_here') return null;
+    if (!googleKey || googleKey === 'your_google_api_key_here' || googleKey === 'CHANGE_ME') return null;
 
     try {
       const url = 'https://maps.googleapis.com/maps/api/directions/json';
@@ -722,69 +723,404 @@ class GhostCommuteService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Heuristic fallback — decompose route by Haversine distance
+  // Returns true if the location is within ~2km of a Mumbai Metro station
+  // (Line 1: Versova-Andheri-Ghatkopar, Line 2A/7: Dahisar-Andheri-Ghatkopar)
   // ──────────────────────────────────────────────────────────────────────────
-  private heuristicDecompose(start: Location, end: Location, departureTime: Date): RawSegment[] {
+  private readonly METRO_STATIONS: Array<{ lat: number; lng: number; name: string }> = [
+    // Line 1: Versova–Andheri–Ghatkopar
+    { lat: 19.1308, lng: 72.8195, name: 'Versova' },
+    { lat: 19.1154, lng: 72.8326, name: 'D.N. Nagar' },
+    { lat: 19.1075, lng: 72.8368, name: 'Azad Nagar' },
+    { lat: 19.1063, lng: 72.8496, name: 'Airport Road' },
+    { lat: 19.1043, lng: 72.8555, name: 'Marol Naka' },
+    { lat: 19.1030, lng: 72.8686, name: 'Saki Naka' },
+    { lat: 19.1040, lng: 72.8779, name: 'Asalpha' },
+    { lat: 19.0951, lng: 72.8897, name: 'Jagruti Nagar' },
+    { lat: 19.0870, lng: 72.9051, name: 'Ghatkopar' },
+    { lat: 19.1197, lng: 72.8468, name: 'Andheri' },
+    // Line 2A: Dahisar E – Andheri W
+    { lat: 19.2499, lng: 72.8567, name: 'Dahisar East' },
+    { lat: 19.2290, lng: 72.8574, name: 'Borivali East' },
+    { lat: 19.2048, lng: 72.8591, name: 'Kandivali East' },
+    { lat: 19.1772, lng: 72.8571, name: 'Goregaon East' },
+    { lat: 19.1543, lng: 72.8513, name: 'Ram Mandir' },
+    { lat: 19.1385, lng: 72.8495, name: 'Jogeshwari East' },
+    { lat: 19.1197, lng: 72.8468, name: 'DN Nagar (2A)' },
+  ];
+
+  private isNearMetroStation(lat: number, lng: number): boolean {
     const R = 6371;
-    const dLat = ((end.lat - start.lat) * Math.PI) / 180;
-    const dLng = ((end.lng - start.lng) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((start.lat * Math.PI) / 180) * Math.cos((end.lat * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-    const distKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return this.METRO_STATIONS.some(stn => {
+      const dLat = ((stn.lat - lat) * Math.PI) / 180;
+      const dLng = ((stn.lng - lng) * Math.PI) / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat * Math.PI) / 180) * Math.cos((stn.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+      const distKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return distKm < 2.0; // within 2km counts as "near metro"
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Station coordinate lookup — used by findNearestStation()
+  // ──────────────────────────────────────────────────────────────────────────
+  private readonly STATION_COORDS: Record<string, { lat: number; lng: number; line: string }> = {
+    // Western Railway (south → north)
+    'Churchgate':      { lat: 18.9353, lng: 72.8258, line: 'Western' },
+    'Marine Lines':    { lat: 18.9448, lng: 72.8224, line: 'Western' },
+    'Charni Road':     { lat: 18.9538, lng: 72.8195, line: 'Western' },
+    'Grant Road':      { lat: 18.9636, lng: 72.8152, line: 'Western' },
+    'Mumbai Central':  { lat: 18.9698, lng: 72.8198, line: 'Western' },
+    'Mahalaxmi':       { lat: 18.9816, lng: 72.8198, line: 'Western' },
+    'Lower Parel':     { lat: 18.9952, lng: 72.8325, line: 'Western' },
+    'Prabhadevi':      { lat: 19.0190, lng: 72.8343, line: 'Western' },
+    'Dadar':           { lat: 19.0178, lng: 72.8478, line: 'Western' },
+    'Matunga Road':    { lat: 19.0263, lng: 72.8445, line: 'Western' },
+    'Mahim':           { lat: 19.0397, lng: 72.8428, line: 'Western' },
+    'Khar Road':       { lat: 19.0727, lng: 72.8374, line: 'Western' },
+    'Bandra':          { lat: 19.0522, lng: 72.8414, line: 'Western' },
+    'Santacruz':       { lat: 19.0835, lng: 72.8424, line: 'Western' },
+    'Vile Parle':      { lat: 19.0996, lng: 72.8494, line: 'Western' },
+    'Andheri':         { lat: 19.1197, lng: 72.8468, line: 'Western' },
+    'Jogeshwari':      { lat: 19.1385, lng: 72.8495, line: 'Western' },
+    'Ram Mandir':      { lat: 19.1543, lng: 72.8513, line: 'Western' },
+    'Goregaon':        { lat: 19.1772, lng: 72.8571, line: 'Western' },
+    'Malad':           { lat: 19.1862, lng: 72.8488, line: 'Western' },
+    'Kandivali':       { lat: 19.2048, lng: 72.8591, line: 'Western' },
+    'Borivali':        { lat: 19.2291, lng: 72.8574, line: 'Western' },
+    'Dahisar':         { lat: 19.2499, lng: 72.8567, line: 'Western' },
+    'Mira Road':       { lat: 19.2817, lng: 72.8557, line: 'Western' },
+    'Bhayandar':       { lat: 19.2906, lng: 72.8542, line: 'Western' },
+    'Naigaon':         { lat: 19.3595, lng: 72.8497, line: 'Western' },
+    'Vasai Road':      { lat: 19.3792, lng: 72.8154, line: 'Western' },
+    'Nala Sopara':     { lat: 19.4168, lng: 72.8122, line: 'Western' },
+    'Virar':           { lat: 19.4544, lng: 72.7997, line: 'Western' },
+    // Central Railway (south → north/east)
+    'CSMT':            { lat: 18.9400, lng: 72.8353, line: 'Central' },
+    'Masjid':          { lat: 18.9465, lng: 72.8356, line: 'Central' },
+    'Sandhurst Road':  { lat: 18.9497, lng: 72.8421, line: 'Central' },
+    'Byculla':         { lat: 18.9612, lng: 72.8362, line: 'Central' },
+    'Chinchpokli':     { lat: 18.9683, lng: 72.8344, line: 'Central' },
+    'Currey Road':     { lat: 18.9752, lng: 72.8322, line: 'Central' },
+    'Parel':           { lat: 18.9908, lng: 72.8350, line: 'Central' },
+    'Matunga':         { lat: 19.0278, lng: 72.8568, line: 'Central' },
+    'Sion':            { lat: 19.0389, lng: 72.8610, line: 'Central' },
+    'Kurla':           { lat: 19.0635, lng: 72.8876, line: 'Central' },
+    'Vidyavihar':      { lat: 19.0783, lng: 72.9023, line: 'Central' },
+    'Ghatkopar':       { lat: 19.0860, lng: 72.9090, line: 'Central' },
+    'Vikhroli':        { lat: 19.1099, lng: 72.9267, line: 'Central' },
+    'Kanjurmarg':      { lat: 19.1355, lng: 72.9418, line: 'Central' },
+    'Bhandup':         { lat: 19.1530, lng: 72.9540, line: 'Central' },
+    'Mulund':          { lat: 19.1730, lng: 72.9607, line: 'Central' },
+    'Thane':           { lat: 19.1860, lng: 72.9480, line: 'Central' },
+    'Dombivli':        { lat: 19.2184, lng: 73.0867, line: 'Central' },
+    'Kalyan':          { lat: 19.2361, lng: 73.1306, line: 'Central' },
+    // Harbour Line
+    'Chembur':         { lat: 19.0521, lng: 72.8999, line: 'Harbour' },
+    'Vashi':           { lat: 19.0645, lng: 73.0011, line: 'Harbour' },
+    'Belapur':         { lat: 19.0189, lng: 73.0387, line: 'Harbour' },
+    'Nerul':           { lat: 19.0354, lng: 73.0173, line: 'Harbour' },
+    'Panvel':          { lat: 18.9894, lng: 73.1175, line: 'Harbour' },
+  };
+
+  /** Returns the nearest Mumbai railway station to the given coordinates */
+  private findNearestStation(lat: number, lng: number): { name: string; line: string; distKm: number } {
+    const R = 6371;
+    let nearest = { name: 'Dadar', line: 'Western', distKm: 999 };
+    for (const [name, stn] of Object.entries(this.STATION_COORDS)) {
+      const dLat = ((stn.lat - lat) * Math.PI) / 180;
+      const dLng = ((stn.lng - lng) * Math.PI) / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat * Math.PI) / 180) * Math.cos((stn.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+      const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      if (dist < nearest.distKm) nearest = { name, line: stn.line, distKm: dist };
+    }
+    return nearest;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Heuristic fallback — decompose route with real station names
+  // ──────────────────────────────────────────────────────────────────────────
+  private heuristicDecompose(start: Location, end: Location, departureTime: Date, osrmDistKm?: number): RawSegment[] {
+    let distKm = osrmDistKm;
+    if (!distKm) {
+      const R = 6371;
+      const dLat = ((end.lat - start.lat) * Math.PI) / 180;
+      const dLng = ((end.lng - start.lng) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos((start.lat * Math.PI) / 180) * Math.cos((end.lat * Math.PI) / 180) *
+        Math.sin(dLng / 2) ** 2;
+      distKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.4;
+    }
 
     const peak = this.isPeakHour(departureTime);
     const superPeak = this.isSuperPeak(departureTime);
 
+    // ── Very short walk ────────────────────────────────────────────────────
     if (distKm < 1.5) {
-      return [{
-        type: 'walk', from: start.name, to: end.name,
-        baseDurationMin: Math.round(distKm * 13),
-        historicalDelayMin: 1, crowdFactor: peak ? 1.25 : 1.0,
-        transferRiskMin: 0, dataSource: 'heuristic',
-      }];
+      return [{ type: 'walk', from: start.name, to: end.name,
+        baseDurationMin: Math.round(distKm * 13), historicalDelayMin: 1,
+        crowdFactor: peak ? 1.25 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' }];
     }
 
-    if (distKm < 8) {
-      return [
-        { type: 'walk', from: start.name, to: `${start.name} Metro Stn`, baseDurationMin: 7, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
-        { type: 'metro', from: `${start.name} Metro Stn`, to: `${end.name} Metro Stn`, baseDurationMin: Math.round(distKm * 3.5), historicalDelayMin: superPeak ? 6 : peak ? 3 : 1, crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'heuristic' },
-        { type: 'walk', from: `${end.name} Metro Stn`, to: end.name, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
-      ];
-    }
+    // ── Find nearest railway stations to start and end ─────────────────────
+    const nearFrom = this.findNearestStation(start.lat, start.lng);
+    const nearTo   = this.findNearestStation(end.lat, end.lng);
 
+    // ── Check if source/dest are already at a known station ──────────────
     const startInfo = stationResolver.getStationInfo(start.name);
-    const endInfo = stationResolver.getStationInfo(end.name);
-    const sameLine = startInfo && endInfo && startInfo.line === endInfo.line;
+    const endInfo   = stationResolver.getStationInfo(end.name);
 
-    // ── Direct Train (Same Line) ──────────────────────────────────────────
-    if (sameLine || distKm < 40) {
+    // Use known station name if matched, else use nearest
+    const fromStation = startInfo?.name ?? nearFrom.name;
+    const toStation   = endInfo?.name   ?? nearTo.name;
+    const fromLine    = startInfo?.line  ?? nearFrom.line;
+    const toLine      = endInfo?.line    ?? nearTo.line;
+
+    // Walk time to/from stations
+    const walkToFrom  = Math.max(2, Math.round(nearFrom.distKm * 13));
+    const walkFromTo  = Math.max(2, Math.round(nearTo.distKm * 13));
+
+    // ─────────────────────────────────────────────────────────────────────
+    // METRO LINE 1 stations (Versova–Andheri–Ghatkopar) with coordinates
+    // ─────────────────────────────────────────────────────────────────────
+    const METRO_L1_STATIONS: Array<{ name: string; lat: number; lng: number }> = [
+      { name: 'Versova',        lat: 19.1308, lng: 72.8195 },
+      { name: 'D.N. Nagar',    lat: 19.1154, lng: 72.8326 },
+      { name: 'Azad Nagar',    lat: 19.1075, lng: 72.8368 },
+      { name: 'Airport Road',  lat: 19.1063, lng: 72.8496 },
+      { name: 'Marol Naka',    lat: 19.1043, lng: 72.8555 },
+      { name: 'Saki Naka',     lat: 19.1030, lng: 72.8686 },
+      { name: 'Asalpha',       lat: 19.1040, lng: 72.8779 },
+      { name: 'Jagruti Nagar', lat: 19.0951, lng: 72.8897 },
+      { name: 'Ghatkopar',     lat: 19.0870, lng: 72.9051 },
+    ];
+
+    // Metro Line 2A stations (Dahisar E – Andheri W)
+    const METRO_L2A_STATIONS: Array<{ name: string; lat: number; lng: number }> = [
+      { name: 'Dahisar East',     lat: 19.2499, lng: 72.8567 },
+      { name: 'Borivali East',    lat: 19.2290, lng: 72.8574 },
+      { name: 'Kandivali East',   lat: 19.2048, lng: 72.8591 },
+      { name: 'Malad East',       lat: 19.1862, lng: 72.8488 },
+      { name: 'Goregaon East',    lat: 19.1772, lng: 72.8571 },
+      { name: 'Ram Mandir',       lat: 19.1543, lng: 72.8513 },
+      { name: 'Jogeshwari East',  lat: 19.1385, lng: 72.8495 },
+      { name: 'Andheri (W)',      lat: 19.1197, lng: 72.8468 },
+    ];
+
+    // Helper: find the nearest Metro L1 station to a coordinate
+    const nearestMetroL1Station = (lat: number, lng: number): { name: string; distKm: number } | null => {
+      const R = 6371;
+      let best: { name: string; distKm: number } | null = null;
+      for (const stn of METRO_L1_STATIONS) {
+        const dLat = ((stn.lat - lat) * Math.PI) / 180;
+        const dLng = ((stn.lng - lng) * Math.PI) / 180;
+        const a = Math.sin(dLat/2)**2 + Math.cos((lat*Math.PI)/180)*Math.cos((stn.lat*Math.PI)/180)*Math.sin(dLng/2)**2;
+        const d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        if (!best || d < best.distKm) best = { name: stn.name, distKm: d };
+      }
+      return best;
+    };
+
+    const nearestMetroL2AStation = (lat: number, lng: number): { name: string; distKm: number } | null => {
+      const R = 6371;
+      let best: { name: string; distKm: number } | null = null;
+      for (const stn of METRO_L2A_STATIONS) {
+        const dLat = ((stn.lat - lat) * Math.PI) / 180;
+        const dLng = ((stn.lng - lng) * Math.PI) / 180;
+        const a = Math.sin(dLat/2)**2 + Math.cos((lat*Math.PI)/180)*Math.cos((stn.lat*Math.PI)/180)*Math.sin(dLng/2)**2;
+        const d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        if (!best || d < best.distKm) best = { name: stn.name, distKm: d };
+      }
+      return best;
+    };
+
+    // Helper: simple km between two lat/lng
+    const kmBetween = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+      const R = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLng = ((lng2 - lng1) * Math.PI) / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos((lat1*Math.PI)/180)*Math.cos((lat2*Math.PI)/180)*Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    };
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SMART ROUTING: Check if Metro Line 1 is the best last-mile option
+    //
+    // Pattern: origin far from metro but destination IS near Metro L1
+    //          → Train to Andheri (Metro L1 western terminus/interchange)
+    //          → Metro L1 to destination metro station
+    //
+    // This covers: Virar/Borivali/Malad/etc → Saki Naka/Ghatkopar/Marol/etc
+    // ─────────────────────────────────────────────────────────────────────
+    const destNearestL1   = nearestMetroL1Station(end.lat, end.lng);
+    const srcNearestL1    = nearestMetroL1Station(start.lat, start.lng);
+    const destNearestL2A  = nearestMetroL2AStation(end.lat, end.lng);
+
+    // Metro L1 THRESHOLD: destination must be within 1.2 km of a L1 station
+    const METRO_CATCHMENT_KM = 1.2;
+
+    // Andheri station coordinates (Local Train + Metro interchange)
+    const ANDHERI_RAIL = this.STATION_COORDS['Andheri'];
+    const ANDHERI_METRO_LAT = 19.1197, ANDHERI_METRO_LNG = 72.8468;
+
+    const destNearL1 = destNearestL1 && destNearestL1.distKm <= METRO_CATCHMENT_KM;
+    const srcNearL1  = srcNearestL1  && srcNearestL1.distKm  <= METRO_CATCHMENT_KM;
+    const destNearL2A = destNearestL2A && destNearestL2A.distKm <= METRO_CATCHMENT_KM;
+
+    // ── CASE 1: Both start AND end near Metro L1 → pure metro trip ────────
+    if (srcNearL1 && destNearL1 && distKm <= 18) {
+      // Calculate metro travel time between the two L1 stations (avg 2.5 min/km)
+      const metroDistKm = kmBetween(start.lat, start.lng, end.lat, end.lng);
+      const walkToMetro  = Math.max(2, Math.round(srcNearestL1!.distKm * 13));
+      const walkFromMetro = Math.max(2, Math.round(destNearestL1!.distKm * 13));
       return [
-        { type: 'walk', from: start.name, to: `${start.name} Station`, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
-        { 
-          type: 'local_train', 
-          from: `${start.name} Station`, 
-          to: `${end.name} Station`, 
-          baseDurationMin: Math.round(distKm * 1.5), 
-          historicalDelayMin: superPeak ? 12 : peak ? 7 : 2, 
-          crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, 
-          transferRiskMin: 5, 
-          dataSource: 'heuristic' 
-        },
-        { type: 'walk', from: `${end.name} Station`, to: end.name, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'walk', from: start.name, to: `${srcNearestL1!.name} Metro Station`,
+          fromLatLng: { lat: start.lat, lng: start.lng },
+          baseDurationMin: walkToMetro, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'metro', from: `${srcNearestL1!.name} Metro Station`, to: `${destNearestL1!.name} Metro Station`,
+          baseDurationMin: Math.max(5, Math.round(metroDistKm * 2.8)),
+          historicalDelayMin: superPeak ? 6 : peak ? 3 : 1,
+          crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'heuristic' },
+        { type: 'walk', from: `${destNearestL1!.name} Metro Station`, to: end.name,
+          toLatLng: { lat: end.lat, lng: end.lng },
+          baseDurationMin: walkFromMetro, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
       ];
     }
 
-    // ── Multi-Leg (Different Lines / Far Distance) ───────────────────────
-    const midPoint = 'Dadar Inter-Change';
+    // ── CASE 2: Origin is on Western Railway, Destination near Metro L1 ───
+    // Route: Walk → Train to Andheri → Metro L1 to dest station → Walk
+    if (destNearL1 && (fromLine === 'Western' || fromLine === 'Central') && !srcNearL1 && ANDHERI_RAIL) {
+      // Train leg: fromStation → Andheri
+      const trainDistKm = kmBetween(
+        this.STATION_COORDS[fromStation]?.lat ?? start.lat,
+        this.STATION_COORDS[fromStation]?.lng ?? start.lng,
+        ANDHERI_RAIL.lat, ANDHERI_RAIL.lng
+      ) * 1.12;
+      const trainMin = Math.max(10, Math.round(trainDistKm / 0.70)); // ~42 km/h
+
+      // Transfer walk inside Andheri station (platform to metro)
+      const transferWalkMin = 6;
+
+      // Metro leg: Andheri → dest metro station
+      const metroDistKm = kmBetween(ANDHERI_METRO_LAT, ANDHERI_METRO_LNG, end.lat, end.lng);
+      const metroMin = Math.max(5, Math.round(metroDistKm * 2.8));
+
+      // Last walk from metro station to final dest
+      const lastWalkMin = Math.max(2, Math.round(destNearestL1!.distKm * 13));
+
+      return [
+        { type: 'walk', from: start.name, to: `${fromStation} Station`,
+          fromLatLng: { lat: start.lat, lng: start.lng },
+          baseDurationMin: walkToFrom, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'local_train', from: `${fromStation} Station`, to: 'Andheri Station',
+          baseDurationMin: trainMin, historicalDelayMin: superPeak ? 12 : peak ? 7 : 2,
+          crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, transferRiskMin: 5, dataSource: 'heuristic' },
+        { type: 'walk', from: 'Andheri Station', to: 'Andheri Metro Station (Transfer)',
+          baseDurationMin: transferWalkMin, historicalDelayMin: 1, crowdFactor: superPeak ? 1.8 : 1.3, transferRiskMin: 2, dataSource: 'heuristic' },
+        { type: 'metro', from: 'Andheri Metro Station', to: `${destNearestL1!.name} Metro Station`,
+          baseDurationMin: metroMin, historicalDelayMin: superPeak ? 6 : peak ? 3 : 1,
+          crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'heuristic' },
+        { type: 'walk', from: `${destNearestL1!.name} Metro Station`, to: end.name,
+          toLatLng: { lat: end.lat, lng: end.lng },
+          baseDurationMin: lastWalkMin, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      ];
+    }
+
+    // ── CASE 3: Destination near Metro L2A (Dahisar–Andheri corridor) ─────
+    // Route: Walk → Train to nearest Western stn on 2A corridor → Metro 2A → Walk
+    if (destNearL2A && fromLine === 'Western' && !srcNearL1) {
+      // Find the best boarding station for L2A (nearest Western station to the L2A boarding point)
+      // Simplify: board at nearest Western station that has L2A nearby
+      // L2A parallels Western line — board metro at nearest L2A station to destination
+      const boardL2A = (() => {
+        const R = 6371;
+        // Find nearest L2A station to end point
+        let best = destNearestL2A!;
+        // Corresponding Western rail station (same name area)
+        const westernStationForL2A: Record<string, string> = {
+          'Dahisar East': 'Dahisar', 'Borivali East': 'Borivali',
+          'Kandivali East': 'Kandivali', 'Malad East': 'Malad',
+          'Goregaon East': 'Goregaon', 'Ram Mandir': 'Ram Mandir',
+          'Jogeshwari East': 'Jogeshwari', 'Andheri (W)': 'Andheri',
+        };
+        const correspondingTrainStn = westernStationForL2A[best.name] ?? 'Andheri';
+        return { metroStation: best.name, trainStation: correspondingTrainStn };
+      })();
+
+      const intStn = this.STATION_COORDS[boardL2A.trainStation] ?? ANDHERI_RAIL;
+      const trainDistKm = kmBetween(
+        this.STATION_COORDS[fromStation]?.lat ?? start.lat,
+        this.STATION_COORDS[fromStation]?.lng ?? start.lng,
+        intStn.lat, intStn.lng
+      ) * 1.12;
+      const trainMin = Math.max(5, Math.round(trainDistKm / 0.70));
+      const metroDistKm = kmBetween(
+        METRO_L2A_STATIONS.find(s => s.name === boardL2A.metroStation)?.lat ?? end.lat,
+        METRO_L2A_STATIONS.find(s => s.name === boardL2A.metroStation)?.lng ?? end.lng,
+        end.lat, end.lng
+      );
+      const metroMin = Math.max(3, Math.round(metroDistKm * 2.8));
+
+      return [
+        { type: 'walk', from: start.name, to: `${fromStation} Station`,
+          fromLatLng: { lat: start.lat, lng: start.lng },
+          baseDurationMin: walkToFrom, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'local_train', from: `${fromStation} Station`, to: `${boardL2A.trainStation} Station`,
+          baseDurationMin: trainMin, historicalDelayMin: superPeak ? 12 : peak ? 7 : 2,
+          crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, transferRiskMin: 5, dataSource: 'heuristic' },
+        { type: 'walk', from: `${boardL2A.trainStation} Station`, to: `${boardL2A.metroStation} Metro Station (Transfer)`,
+          baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: superPeak ? 1.8 : 1.3, transferRiskMin: 2, dataSource: 'heuristic' },
+        { type: 'metro', from: `${boardL2A.metroStation} Metro Station`, to: `${destNearestL2A!.name} Metro Station`,
+          baseDurationMin: metroMin, historicalDelayMin: superPeak ? 6 : peak ? 3 : 1,
+          crowdFactor: superPeak ? 1.6 : peak ? 1.35 : 1.0, transferRiskMin: 3, dataSource: 'heuristic' },
+        { type: 'walk', from: `${destNearestL2A!.name} Metro Station`, to: end.name,
+          toLatLng: { lat: end.lat, lng: end.lng },
+          baseDurationMin: Math.max(2, Math.round(destNearestL2A!.distKm * 13)), historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      ];
+    }
+
+    // ── CASE 4: Direct train — same line and no better metro option ────────
+    if (fromLine === toLine) {
+      const fs = this.STATION_COORDS[fromStation];
+      const ts = this.STATION_COORDS[toStation];
+      let trainDist = distKm;
+      if (fs && ts) {
+        trainDist = kmBetween(fs.lat, fs.lng, ts.lat, ts.lng) * 1.15;
+      }
+      return [
+        { type: 'walk', from: start.name, to: `${fromStation} Station`, baseDurationMin: walkToFrom, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+        { type: 'local_train', from: `${fromStation} Station`, to: `${toStation} Station`,
+          baseDurationMin: Math.round(trainDist / 0.70), // ~42km/hr avg local train
+          historicalDelayMin: superPeak ? 12 : peak ? 7 : 2,
+          crowdFactor: superPeak ? 1.8 : peak ? 1.5 : 1.1, transferRiskMin: 5, dataSource: 'heuristic' },
+        { type: 'walk', from: `${toStation} Station`, to: end.name, baseDurationMin: walkFromTo, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      ];
+    }
+
+    // ── CASE 5: Cross-line transfer (Western ↔ Central, etc.) ─────────────
+    const interchange = (fromLine === 'Western' && toLine === 'Central') || (fromLine === 'Central' && toLine === 'Western')
+      ? 'Dadar'
+      : (toLine === 'Harbour' || fromLine === 'Harbour') ? 'Kurla'
+      : 'Dadar';
+
+    const intStn = this.STATION_COORDS[interchange];
+    const FS = this.STATION_COORDS[fromStation];
+    const TS = this.STATION_COORDS[toStation];
+
+    let leg1Dist = distKm * 0.55, leg2Dist = distKm * 0.55;
+    if (FS && intStn) leg1Dist = kmBetween(FS.lat, FS.lng, intStn.lat, intStn.lng) * 1.15;
+    if (TS && intStn) leg2Dist = kmBetween(intStn.lat, intStn.lng, TS.lat, TS.lng) * 1.15;
+
     return [
-      { type: 'walk', from: start.name, to: `${start.name} Station`, baseDurationMin: 6, historicalDelayMin: 1, crowdFactor: peak ? 1.4 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
-      { type: 'local_train', from: `${start.name} Station`, to: midPoint, baseDurationMin: Math.round(distKm * 0.9), historicalDelayMin: peak ? 9 : 3, crowdFactor: peak ? 1.6 : 1.1, transferRiskMin: 8, dataSource: 'heuristic' },
-      { type: 'local_train', from: midPoint, to: `${end.name} Station`, baseDurationMin: Math.round(distKm * 0.6), historicalDelayMin: peak ? 10 : 4, crowdFactor: peak ? 1.5 : 1.0, transferRiskMin: 5, dataSource: 'heuristic' },
-      { type: 'walk', from: `${end.name} Station`, to: end.name, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      { type: 'walk', from: start.name, to: `${fromStation} Station`, baseDurationMin: walkToFrom, historicalDelayMin: 1, crowdFactor: peak ? 1.3 : 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
+      { type: 'local_train', from: `${fromStation} Station`, to: `${interchange} Station`,
+        baseDurationMin: Math.round(leg1Dist / 0.70), historicalDelayMin: peak ? 9 : 3, crowdFactor: peak ? 1.6 : 1.1, transferRiskMin: 8, dataSource: 'heuristic' },
+      { type: 'walk', from: `${interchange} Station`, to: `${interchange} Platform (Change)`, baseDurationMin: 5, historicalDelayMin: 1, crowdFactor: superPeak ? 1.9 : 1.4, transferRiskMin: 3, dataSource: 'heuristic' },
+      { type: 'local_train', from: `${interchange} Station`, to: `${toStation} Station`,
+        baseDurationMin: Math.round(leg2Dist / 0.70), historicalDelayMin: peak ? 10 : 4, crowdFactor: peak ? 1.5 : 1.0, transferRiskMin: 5, dataSource: 'heuristic' },
+      { type: 'walk', from: `${toStation} Station`, to: end.name, baseDurationMin: walkFromTo, historicalDelayMin: 1, crowdFactor: 1.0, transferRiskMin: 0, dataSource: 'heuristic' },
     ];
   }
+
 
   // ──────────────────────────────────────────────────────────────────────────
   // Predict per-leg duration (ML-style bands)
@@ -887,7 +1223,8 @@ class GhostCommuteService {
     pref: JourneyPreferences,
     start: Location,
     end: Location,
-    distKm: number
+    distKm: number,
+    osrmDurationMin?: number
   ): Promise<AlternativeRoute[]> {
     const base = primary.totalTimeMin;
     const peak = this.isPeakHour(new Date());
@@ -896,23 +1233,53 @@ class GhostCommuteService {
     // Try Cab ETA (Uber first, fallback to Ola)
     const cabEta = await this.fetchUberEta(start.lat, start.lng, end.lat, end.lng)
                 || await this.fetchOlaEta(start.lat, start.lng, end.lat, end.lng);
-    const cabTime = cabEta?.durationMin ?? Math.round(distKm * 3.5 + (peak ? 15 : 5));
+    const cabTime = cabEta?.durationMin ?? (osrmDurationMin ? Math.round(osrmDurationMin * (peak ? 1.4 : 1.1)) : Math.round(distKm * 3.5 + (peak ? 15 : 5)));
     const cabSource = cabEta?.source ?? 'heuristic';
     const cabCost = this.calculateCabCost(distKm, peak, superPeak);
 
+    const uberPrice = cabEta?.source === 'uber' ? cabCost : Math.round(100 + (distKm * 18));
+    const olaPrice = cabEta?.source === 'ola' ? cabCost : Math.round(90 + (distKm * 16));
+    const rapidoPrice = Math.round(40 + (distKm * 8));
+
     const alts: AlternativeRoute[] = [
       {
-        id: 'alt-cab',
-        label: 'Cab / Auto Direct',
+        id: 'alt-uber',
+        label: 'Uber Go',
         totalTimeMin: cabTime,
         timeRange: { min: cabTime - 5, max: cabTime + 15 },
-        confidence: cabEta ? 80 : 72,
+        confidence: 85,
         costScore: 20,
+        safetyScore: 90,
+        tradeoff: `~${cabTime} min — comfortable cab ride`,
+        legs: [`UberGo: ${start.name} → ${end.name}`],
+        predictedCost: uberPrice,
+        etaSource: 'Live Uber/Heuristic',
+      },
+      {
+        id: 'alt-ola',
+        label: 'Ola Mini',
+        totalTimeMin: cabTime + 3,
+        timeRange: { min: cabTime - 2, max: cabTime + 20 },
+        confidence: 82,
+        costScore: 25,
         safetyScore: 88,
-        tradeoff: `~${cabTime} min door-to-door — distance-based pricing, avoids crowd`,
-        legs: [`Auto/Cab: ${start.name} → ${end.name}`],
-        predictedCost: cabCost,
-        etaSource: cabSource,
+        tradeoff: `~${cabTime + 3} min — standard cab`,
+        legs: [`Ola Mini: ${start.name} → ${end.name}`],
+        predictedCost: olaPrice,
+        etaSource: 'Live Ola/Heuristic',
+      },
+      {
+        id: 'alt-rapido',
+        label: 'Rapido Bike Array',
+        totalTimeMin: Math.max(10, Math.round(cabTime * 0.75)),
+        timeRange: { min: Math.max(8, Math.round(cabTime * 0.65)), max: Math.max(15, Math.round(cabTime * 0.9)) },
+        confidence: 76,
+        costScore: 90,
+        safetyScore: 60,
+        tradeoff: `~${Math.round(cabTime * 0.75)} min — fast in traffic, exposed to weather`,
+        legs: [`Rapido Bike: ${start.name} → ${end.name}`],
+        predictedCost: rapidoPrice,
+        etaSource: 'Heuristic',
       },
       {
         id: 'alt-early',
@@ -1054,6 +1421,7 @@ class GhostCommuteService {
     // ── 1. Route decomposition (ORS real data or heuristic fallback) ─────
     let rawSegments: RawSegment[] | null = null;
     let routeGeometry: Array<{ lat: number; lng: number }> | null = null;
+    let osrmData: { distanceKm: number; durationMin: number; geometry: any[] } | null = null;
 
     const googleResult = await this.fetchGoogleDirections(startLocation, endLocation, departureTime);
     if (googleResult && googleResult.segments && googleResult.segments.length > 0) {
@@ -1067,8 +1435,23 @@ class GhostCommuteService {
         routeGeometry = orsResult.geometry;
         usedAPIs.push('OpenRouteService Directions API');
       } else {
-        rawSegments = this.heuristicDecompose(startLocation, endLocation, departureTime);
-        routeGeometry = [{ lat: startLocation.lat, lng: startLocation.lng }, { lat: endLocation.lat, lng: endLocation.lng }];
+        try {
+          const osrmRes = await axios.get(`https://router.project-osrm.org/route/v1/driving/${startLocation.lng},${startLocation.lat};${endLocation.lng},${endLocation.lat}?overview=simplified&geometries=geojson`, { timeout: 3000 });
+          if (osrmRes.data?.routes?.[0]) {
+            const r = osrmRes.data.routes[0];
+            osrmData = {
+              distanceKm: r.distance / 1000,
+              durationMin: r.duration / 60,
+              geometry: r.geometry?.coordinates?.map((c: any) => ({ lat: c[1], lng: c[0] })) || []
+            };
+          }
+        } catch (e) {
+          console.warn('OSRM fallback failed', (e as any)?.message);
+        }
+
+        rawSegments = this.heuristicDecompose(startLocation, endLocation, departureTime, osrmData?.distanceKm);
+        routeGeometry = osrmData?.geometry?.length ? osrmData.geometry : [{ lat: startLocation.lat, lng: startLocation.lng }, { lat: endLocation.lat, lng: endLocation.lng }];
+        if (osrmData) usedAPIs.push('OSRM Open Source Routing');
       }
     }
 
@@ -1196,7 +1579,7 @@ class GhostCommuteService {
     // ── 8. Timeline ───────────────────────────────────────────────────────
     const journeyTimeline = this.buildTimeline(segments, departureTime);
 
-    // ── 9. Haversine distance for alternatives ────────────────────────────
+    // ── 9. Distance for alternatives ────────────────────────────
     const R = 6371;
     const dLat = ((endLocation.lat - startLocation.lat) * Math.PI) / 180;
     const dLng = ((endLocation.lng - startLocation.lng) * Math.PI) / 180;
@@ -1204,7 +1587,8 @@ class GhostCommuteService {
       Math.sin(dLat / 2) ** 2 +
       Math.cos((startLocation.lat * Math.PI) / 180) * Math.cos((endLocation.lat * Math.PI) / 180) *
       Math.sin(dLng / 2) ** 2;
-    const distKm = R * 2 * Math.atan2(Math.sqrt(aH), Math.sqrt(1 - aH));
+    const haversineKm = R * 2 * Math.atan2(Math.sqrt(aH), Math.sqrt(1 - aH));
+    const distKm = osrmData?.distanceKm || haversineKm * 1.4;
 
     const totalPredictedCost = segments.reduce((sum, s) => sum + s.predictedCost, 0);
 
@@ -1227,7 +1611,7 @@ class GhostCommuteService {
       summary: this.buildSummary(totalMin, avgConf, overallRisk, startLocation, endLocation),
     };
 
-    partialResult.alternatives = await this.buildAlternatives(partialResult, preferences, startLocation, endLocation, distKm);
+    partialResult.alternatives = await this.buildAlternatives(partialResult, preferences, startLocation, endLocation, distKm, osrmData?.durationMin);
 
     this.setToCache(routeKey, partialResult);
     return partialResult;

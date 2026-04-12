@@ -6,13 +6,25 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, MapPin, Calendar, Clock, ChevronRight, 
   Zap, Leaf, AlertTriangle, Play,
-  Train, Car, Info
+  Train, Car, Info, Bike, Bus, PersonStanding,
+  ShieldCheck, RefreshCw
 } from 'lucide-react';
 import { RootState, AppDispatch, fetchRoutes, selectRoute, updateSearchParams } from '../store/journeySlice';
-<<<<<<< HEAD
 import { formatRouteHeadline } from '../utils/formatLegInstructions';
-=======
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
+
+/** Returns the correct icon element and colour class for a given transport mode */
+function getModeIcon(mode: string): { icon: React.ReactNode; color: string; label: string } {
+  const m = mode?.toLowerCase() ?? '';
+  if (m === 'uber') return { icon: <Car className="w-6 h-6" />, color: 'text-white bg-black', label: 'Uber Go' };
+  if (m === 'ola') return { icon: <Car className="w-6 h-6" />, color: 'text-[#3CD070] bg-[#1a2e22]', label: 'Ola Mini' };
+  if (m === 'rapido') return { icon: <Bike className="w-6 h-6" />, color: 'text-[#FFCF00] bg-[#2e2a10]', label: 'Rapido Bike' };
+  if (m === 'train') return { icon: <Train className="w-6 h-6" />, color: 'text-sky-400 bg-sky-950/60', label: 'Local Train' };
+  if (m === 'metro') return { icon: <Train className="w-6 h-6" />, color: 'text-violet-400 bg-violet-950/60', label: 'Metro' };
+  if (m === 'bus') return { icon: <Bus className="w-6 h-6" />, color: 'text-orange-400 bg-orange-950/60', label: 'Bus' };
+  if (m === 'walk') return { icon: <PersonStanding className="w-6 h-6" />, color: 'text-green-400 bg-green-950/60', label: 'Walk' };
+  return { icon: <Car className="w-6 h-6" />, color: 'text-amber-400 bg-amber-950/60', label: mode || 'Cab' };
+}
+
 
 const apiBase = () => import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -35,7 +47,7 @@ function parseCombinedLocal(dateStr: string, timeStr: string): Date {
   return new Date(Y, (M || 1) - 1, D || 1, h || 0, m || 0, 0, 0);
 }
 
-const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) => {
+const JourneyPlanner: React.FC<{ onNavigate?: () => void; onNavigateRoute?: (route: any) => void }> = ({ onNavigate, onNavigateRoute }) => {
   const dispatch = useDispatch<AppDispatch>();
   const { results, selectedRoute, loading, searchParams } = useSelector((state: RootState) => state.journey);
   const [isExpanded, setIsExpanded] = useState<string | null>(null);
@@ -43,8 +55,42 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
   const [toSuggestions, setToSuggestions] = useState<Array<{name:string;lat:number;lng:number}>>([]);
   const [showFromSuggestions, setShowFromSuggestions] = useState(false);
   const [showToSuggestions, setShowToSuggestions] = useState(false);
+  const [fromLoading, setFromLoading] = useState(false);
+  const [toLoading, setToLoading] = useState(false);
   const travelDateInputRef = useRef<HTMLInputElement>(null);
   const travelTimeInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Price verification state ─────────────────────────────────────────────
+  const [verifiedFares, setVerifiedFares] = useState<any | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  // Auto-run price verification whenever a route is selected (2.5s simulated check)
+  useEffect(() => {
+    if (!selectedRoute?.fromCoords || !selectedRoute?.toCoords) return;
+    setVerifiedFares(null);
+    setVerifyError(null);
+    setVerifyLoading(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await axios.post(`${apiBase()}/api/journey/verify-fares`, {
+          fromLat: selectedRoute.fromCoords!.lat,
+          fromLng: selectedRoute.fromCoords!.lng,
+          toLat:   selectedRoute.toCoords!.lat,
+          toLng:   selectedRoute.toCoords!.lng,
+          departureTime: searchParams.time || new Date().toISOString(),
+        });
+        setVerifiedFares(res.data?.data ?? null);
+      } catch (e: any) {
+        setVerifyError('Could not verify fares');
+      } finally {
+        setVerifyLoading(false);
+      }
+    }, 2500); // 2.5 second delay as requested
+
+    return () => clearTimeout(timer);
+  }, [selectedRoute?.id]);
 
   /** Keep store aligned with what the date/time fields show on first paint. */
   useEffect(() => {
@@ -62,6 +108,7 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
       return;
     }
 
+    if (type === 'from') setFromLoading(true); else setToLoading(true);
     try {
       const res = await axios.get(`${apiBase()}/api/geocode/autocomplete`, { params: { q: trimmed } });
       const suggestions = (res.data?.data?.suggestions || []).slice(0, 8);
@@ -69,16 +116,18 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
     } catch (err) {
       console.warn('Autocomplete fetch error:', err);
       if (type === 'from') setFromSuggestions([]); else setToSuggestions([]);
+    } finally {
+      if (type === 'from') setFromLoading(false); else setToLoading(false);
     }
   };
 
   useEffect(() => {
-    const timer = setTimeout(() => fetchAutocomplete(searchParams.from || '', 'from'), 250);
+    const timer = setTimeout(() => fetchAutocomplete(searchParams.from || '', 'from'), 100);
     return () => clearTimeout(timer);
   }, [searchParams.from]);
 
   useEffect(() => {
-    const timer = setTimeout(() => fetchAutocomplete(searchParams.to || '', 'to'), 250);
+    const timer = setTimeout(() => fetchAutocomplete(searchParams.to || '', 'to'), 100);
     return () => clearTimeout(timer);
   }, [searchParams.to]);
 
@@ -107,18 +156,22 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
               onFocus={() => setShowFromSuggestions(true)}
               onBlur={() => setTimeout(() => setShowFromSuggestions(false), 150)}
             />
-            {showFromSuggestions && fromSuggestions.length > 0 && (
+            {showFromSuggestions && (fromSuggestions.length > 0 || fromLoading) && (
               <div className="absolute left-0 right-0 mt-1 bg-surface/95 border border-white/10 shadow-xl z-20 rounded-xl max-h-64 overflow-y-auto">
-                {fromSuggestions.map((item) => (
-                  <button
-                    key={item.name}
-                    onMouseDown={(e) => { e.preventDefault(); dispatch(updateSearchParams({ from: item.name })); setShowFromSuggestions(false); }}
-                    className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors"
-                  >
-                    <span className="font-semibold">{item.name}</span>
-                    <span className="block text-xs text-white/50">{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
-                  </button>
-                ))}
+                {fromLoading ? (
+                   <div className="px-3 py-4 text-center text-white/50 text-sm animate-pulse">Loading suggestions...</div>
+                ) : (
+                  fromSuggestions.map((item) => (
+                    <button
+                      key={item.name}
+                      onMouseDown={(e) => { e.preventDefault(); dispatch(updateSearchParams({ from: item.name })); setShowFromSuggestions(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors"
+                    >
+                      <span className="font-semibold">{item.name}</span>
+                      <span className="block text-xs text-white/50">{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -134,18 +187,22 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
               onFocus={() => setShowToSuggestions(true)}
               onBlur={() => setTimeout(() => setShowToSuggestions(false), 150)}
             />
-            {showToSuggestions && toSuggestions.length > 0 && (
+            {showToSuggestions && (toSuggestions.length > 0 || toLoading) && (
               <div className="absolute left-0 right-0 mt-1 bg-surface/95 border border-white/10 shadow-xl z-20 rounded-xl max-h-64 overflow-y-auto">
-                {toSuggestions.map((item) => (
-                  <button
-                    key={item.name}
-                    onMouseDown={(e) => { e.preventDefault(); dispatch(updateSearchParams({ to: item.name })); setShowToSuggestions(false); }}
-                    className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors"
-                  >
-                    <span className="font-semibold">{item.name}</span>
-                    <span className="block text-xs text-white/50">{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
-                  </button>
-                ))}
+                {toLoading ? (
+                   <div className="px-3 py-4 text-center text-white/50 text-sm animate-pulse">Loading suggestions...</div>
+                ) : (
+                  toSuggestions.map((item) => (
+                    <button
+                      key={item.name}
+                      onMouseDown={(e) => { e.preventDefault(); dispatch(updateSearchParams({ to: item.name })); setShowToSuggestions(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors"
+                    >
+                      <span className="font-semibold">{item.name}</span>
+                      <span className="block text-xs text-white/50">{item.lat.toFixed(4)}, {item.lng.toFixed(4)}</span>
+                    </button>
+                  ))
+                )}
               </div>
             )}
           </div>
@@ -276,28 +333,33 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
               } hover:bg-surface-bright/20`}
             >
               <div className="flex items-start justify-between">
-                <div className="flex gap-4">
-                  <div className={`p-4 rounded-2xl bg-surface-bright/40 ${selectedRoute?.id === route.id ? 'text-primary' : 'text-white/40'}`}>
-                    {route.mode === 'Metro' ? <Train className="w-6 h-6" /> : <Car className="w-6 h-6" />}
-                  </div>
-                  <div>
-<<<<<<< HEAD
-                    <h3 className="font-headline font-bold text-lg mb-1">
-                      {formatRouteHeadline(route.from, route.to)}
+                <div className="flex gap-4 items-center">
+                  {/* Mode Icon Badge */}
+                  {(() => {
+                    const isPrimary = route.id === 'sim-default' || route.id?.startsWith('JRN-');
+                    const displayMode = isPrimary ? route.mode : route.mode;
+                    const { icon, color } = getModeIcon(displayMode);
+                    return (
+                      <div className={`p-3 rounded-2xl shrink-0 ${color} ${selectedRoute?.id === route.id ? 'ring-2 ring-primary/60 ring-offset-1 ring-offset-surface' : ''}`}>
+                        {icon}
+                      </div>
+                    );
+                  })()}
+                  <div className="min-w-0">
+                    <h3 className="font-headline font-bold text-base mb-0.5 leading-tight">
+                      {/* Primary route: show journey headline. Alternatives: show service name */}
+                      {route.id?.startsWith('JRN-') || route.id === 'sim-default'
+                        ? formatRouteHeadline(route.from, route.to)
+                        : getModeIcon(route.mode).label}
                     </h3>
-=======
-                    <h3 className="font-headline font-bold text-lg mb-1">{route.summary}</h3>
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
-                    <div className="flex items-center gap-4 text-sm text-white/40 font-medium">
-                      <span className="flex items-center gap-1"><Clock className="w-4 h-4" /> {route.eta} min</span>
-                      <span className="flex items-center gap-1">₹ {route.cost}</span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2 text-[10px]">
-                      {route.dataSources?.map((source) => (
-                        <span key={`${route.id}-${source}`} className="px-2 py-1 rounded-full bg-white/10 text-white/80 border border-white/20">
-                          {source.includes('fallback') ? 'Fallback' : source.includes('OpenRoute') ? 'Live ORS' : source}
-                        </span>
-                      ))}
+                    {/* For alternatives, show the route in smaller text */}
+                    {!route.id?.startsWith('JRN-') && route.id !== 'sim-default' && (
+                      <p className="text-[11px] text-white/30 mb-1">{route.from} → {route.to}</p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-semibold text-white/50">
+                      <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {route.eta} min</span>
+                      <span className="text-white/20">·</span>
+                      <span className="text-secondary/90 font-bold">₹{route.cost}</span>
                     </div>
                   </div>
                 </div>
@@ -313,6 +375,46 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                     className="overflow-hidden mt-6 pt-6 border-t border-white/5"
                   >
                     <div className="space-y-6">
+
+                      {/* ── Route Steps ── */}
+                      {route.segments && route.segments.length > 0 && (
+                        <div>
+                          <label className="text-[10px] font-headline font-black tracking-widest text-white/30 uppercase flex items-center gap-2 mb-3">
+                            <ChevronRight className="w-3 h-3 text-primary" /> Route Breakdown
+                          </label>
+                          <div className="space-y-0">
+                            {route.segments.map((seg, i) => {
+                              const { icon, color } = getModeIcon(seg.mode);
+                              const isLast = i === route.segments!.length - 1;
+                              return (
+                                <div key={i} className="flex gap-3">
+                                  {/* Timeline spine */}
+                                  <div className="flex flex-col items-center">
+                                    <div className={`w-8 h-8 rounded-xl shrink-0 flex items-center justify-center ${color}`}>
+                                      {icon}
+                                    </div>
+                                    {!isLast && <div className="w-px flex-1 bg-white/10 my-1" />}
+                                  </div>
+                                  {/* Leg info */}
+                                  <div className={`pb-4 min-w-0 ${isLast ? '' : ''}`}>
+                                    <p className="text-sm font-bold text-white/90 leading-tight">
+                                      {seg.instructions}
+                                    </p>
+                                    <p className="text-[11px] text-white/40 mt-0.5">
+                                      {seg.duration} min
+                                      {seg.waitTimeMin && seg.waitTimeMin > 0 ? ` · ${seg.waitTimeMin} min wait` : ''}
+                                      {seg.crowdLevel && seg.crowdLevel !== 'Light' ? ` · ${seg.crowdLevel} crowd` : ''}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Prediction Band ── */}
+
                       <div className="flex items-center justify-between">
                         <label className="text-[10px] font-headline font-black tracking-widest text-white/30 uppercase flex items-center gap-2">
                           <Play className="w-3 h-3 text-primary fill-primary" /> Ghost Commute Prediction Band
@@ -322,6 +424,7 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                            <div className="px-2 py-1 rounded-md bg-white/5 text-[10px] text-white/40 font-bold">ETA RANGE: ±{Math.floor(route.eta * 0.1)}m</div>
                         </div>
                       </div>
+
 
                       {/* Prediction Timeline */}
                       <div className="relative h-20 bg-surface-bright/20 rounded-2xl overflow-hidden p-4">
@@ -355,16 +458,119 @@ const JourneyPlanner: React.FC<{ onNavigate?: () => void }> = ({ onNavigate }) =
                               <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Risk Factors</span>
                            </div>
                            <p className="text-xs text-white/40 leading-relaxed">
-                             Platform 1 crowd density expected at 85%. Minor track signaling delay reported near Parel.
+                             {route.riskFactors || 'No significant offline or live delays reported on this route.'}
                            </p>
                         </div>
                         <button 
-                          onClick={(e) => { e.stopPropagation(); if(onNavigate) onNavigate(); }}
+                          onClick={(e) => {
+                             e.stopPropagation();
+                             if (onNavigateRoute && route) {
+                               onNavigateRoute(route);
+                             } else if (onNavigate) {
+                               onNavigate();
+                             }
+                           }}
                           className="bg-secondary text-surface font-headline font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:scale-[1.02] transition-transform"
                         >
                           NAVIGATE NOW <Zap className="w-5 h-5 fill-surface" />
                         </button>
                       </div>
+
+                      {/* ── Verified Fares Panel ── */}
+                      <div className="mt-2">
+                        <label className="text-[10px] font-headline font-black tracking-widest text-white/30 uppercase flex items-center gap-2 mb-3">
+                          <ShieldCheck className="w-3 h-3 text-emerald-400" /> Cross-Verified Fare Comparison
+                        </label>
+
+                        {verifyLoading && (
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="space-y-2"
+                          >
+                            {/* Shimmer rows */}
+                            {[1,2,3,4].map(i => (
+                              <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 overflow-hidden relative">
+                                <motion.div
+                                  animate={{ x: ['-100%', '200%'] }}
+                                  transition={{ duration: 1.2, repeat: Infinity, ease: 'linear', delay: i * 0.15 }}
+                                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+                                />
+                                <div className="w-8 h-8 rounded-lg bg-white/10 shrink-0" />
+                                <div className="flex-1 space-y-1.5">
+                                  <div className="h-2.5 w-24 bg-white/10 rounded-full" />
+                                  <div className="h-2 w-36 bg-white/6 rounded-full" />
+                                </div>
+                                <div className="h-3 w-12 bg-white/10 rounded-full" />
+                              </div>
+                            ))}
+                            <p className="text-center text-[10px] text-white/30 animate-pulse flex items-center justify-center gap-1.5 pt-1">
+                              <RefreshCw className="w-3 h-3 animate-spin" /> Verifying prices against official rates…
+                            </p>
+                          </motion.div>
+                        )}
+
+                        {verifyError && (
+                          <p className="text-xs text-red-400/70 p-3 bg-red-950/30 rounded-xl">{verifyError}</p>
+                        )}
+
+                        {verifiedFares && !verifyLoading && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.4 }}
+                            className="space-y-2"
+                          >
+                            {/* Distance summary */}
+                            <div className="flex gap-2 text-[11px] text-white/50 mb-1 px-1">
+                              <span>📏 Road distance: <span className="text-white/80 font-bold">{Number(verifiedFares.totalDistanceKm).toFixed(1)} km</span></span>
+                              <span className="text-white/20">·</span>
+                              <span>🕐 Drive time: <span className="text-white/80 font-bold">{verifiedFares.totalDurationMin} min</span></span>
+                            </div>
+
+                            {/* Fare table */}
+                            {(verifiedFares.fares as any[]).map((f: any) => {
+                              const isCheapest = f.mode === verifiedFares.cheapestMode;
+                              const isFastest  = f.mode === verifiedFares.fastestMode;
+                              const modeLabels: Record<string,string> = {
+                                local_train: '🚂 Local Train', metro: '🚇 Metro',
+                                uber: '🚗 Uber Go', ola: '🚕 Ola Mini',
+                                rapido: '🛵 Rapido Bike', bus: f.verifiedDistanceKm > 35 ? '🚌 ST Bus' : '🚌 BEST Bus', auto: '🛺 Auto Rickshaw',
+                              };
+                              const label = modeLabels[f.mode] ?? f.mode;
+                              const isFlat = f.verifiedCostMin === f.verifiedCostMax;
+                              return (
+                                <div key={f.mode}
+                                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                                    isCheapest ? 'border-emerald-500/40 bg-emerald-950/20' : 'border-white/5 bg-white/3'
+                                  }`}
+                                >
+                                  <span className="text-sm shrink-0 w-6 text-center">{label.split(' ')[0]}</span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-bold text-white/85 leading-tight">{label.split(' ').slice(1).join(' ')}</p>
+                                    <p className="text-[10px] text-white/30">{Number(f.verifiedDistanceKm).toFixed(1)} km · {f.verifiedDurationMin} min</p>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <p className={`text-sm font-black ${isCheapest ? 'text-emerald-400' : 'text-white/80'}`}>
+                                      ₹{isFlat ? f.verifiedCostBest : `${f.verifiedCostMin}–${f.verifiedCostMax}`}
+                                    </p>
+                                    <div className="flex gap-1 justify-end mt-0.5">
+                                      {isCheapest && <span className="text-[8px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full font-bold uppercase">CHEAPEST</span>}
+                                      {isFastest  && <span className="text-[8px] bg-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded-full font-bold uppercase">FASTEST</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+
+                            <p className="text-[9px] text-white/20 px-1 pt-1 flex items-center gap-1">
+                              <ShieldCheck className="w-2.5 h-2.5 text-emerald-500/50" />
+                              Official rates · {new Date(verifiedFares.verifiedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </motion.div>
+                        )}
+                      </div>
+
                     </div>
                   </motion.div>
                 )}

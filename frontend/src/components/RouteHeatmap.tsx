@@ -3,10 +3,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { motion } from "motion/react";
 import { generateRoutePoints, STATION_COORDINATES } from "../utils/stationCoordinates";
-<<<<<<< HEAD
 import { formatRouteHeadline } from "../utils/formatLegInstructions";
-=======
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
 
 interface RouteHeatmapProps {
   routes: any[];
@@ -19,6 +16,36 @@ function trafficLoadLabel(trustScore: number): string {
   return 'Heavy';
 }
 
+/** Creates a round icon with emoji + label tag — used for source/dest markers */
+function makePinIcon(emoji: string, color: string, label: string): L.DivIcon {
+  return L.divIcon({
+    className: '',
+    iconSize: [42, 54],
+    iconAnchor: [21, 54],
+    popupAnchor: [0, -56],
+    html: `
+      <div style="position:relative;width:42px;height:54px;display:flex;flex-direction:column;align-items:center;">
+        <div style="
+          width:42px;height:42px;border-radius:50%;
+          background:${color};
+          border:3px solid #fff;
+          box-shadow:0 0 14px ${color}99,0 3px 10px rgba(0,0,0,0.55);
+          display:flex;align-items:center;justify-content:center;
+          font-size:20px;
+        ">${emoji}</div>
+        <div style="width:4px;height:12px;background:linear-gradient(to bottom,${color},transparent);border-radius:0 0 3px 3px;"></div>
+        <div style="
+          position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);
+          background:rgba(0,0,0,0.88);color:#fff;
+          font:700 9px/13px system-ui;
+          padding:2px 6px;border-radius:3px;
+          white-space:nowrap;max-width:90px;overflow:hidden;text-overflow:ellipsis;
+          border:1px solid ${color}66;
+        ">${label}</div>
+      </div>`,
+  });
+}
+
 const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -26,49 +53,59 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
   // Mumbai coordinates
   const MUMBAI_CENTER: [number, number] = [19.0760, 72.8777];
 
-  // Generate realistic traffic heatmap data for Mumbai routes
+  // Generate realistic traffic heatmap data only for the target route
   const generateHeatmapData = () => {
     const data: [number, number, number][] = [];
+    const targetRoute = selectedRoute || routes[0];
+    if (!targetRoute) return data;
 
-    // Add traffic hotspots at all major stations
-    Object.entries(STATION_COORDINATES).forEach(([stationName, coords]) => {
-      // Add main hotspot at station
-      data.push([coords.lat, coords.lng, 0.6 + Math.random() * 0.4]);
+    const congestionLevel = 1 - ((targetRoute.safetyRating || targetRoute.trustScore || 80) / 100);
+
+    // Get the detailed segments from simulation to extract actual stations and crowd factors
+    const simSegments = targetRoute.simulation?.segments || [];
+    
+    // We add intense hotspots exactly at the transfer stations involved in this route
+    simSegments.forEach((seg: any) => {
+      // Find crowd factor for this specific segment
+      const cf = seg.crowdFactor || 1.0;
+      // High crowd factor -> high intensity (red). Low crowd factor -> lower intensity
+      const baseIntensity = Math.min(1, Math.max(0.2, (cf - 0.5) / 1.5));
       
-      // Add surrounding congestion points
-      for (let i = 0; i < 3; i++) {
-        const offsetLat = coords.lat + (Math.random() - 0.5) * 0.03;
-        const offsetLng = coords.lng + (Math.random() - 0.5) * 0.03;
-        data.push([offsetLat, offsetLng, (0.4 + Math.random() * 0.3)]);
+      const stnCoords1 = STATION_COORDINATES[seg.from?.replace(/\s+station/i, '').trim()];
+      const stnCoords2 = STATION_COORDINATES[seg.to?.replace(/\s+station/i, '').trim()];
+      
+      // Plot hotspots around the exact stations of this route
+      if (stnCoords1) {
+        data.push([stnCoords1.lat, stnCoords1.lng, Math.min(1, baseIntensity + 0.3)]);
+        for (let i = 0; i < 2; i++) {
+          data.push([stnCoords1.lat + (Math.random() - 0.5) * 0.015, stnCoords1.lng + (Math.random() - 0.5) * 0.015, baseIntensity]);
+        }
+      }
+      if (stnCoords2) {
+        data.push([stnCoords2.lat, stnCoords2.lng, Math.min(1, baseIntensity + 0.3)]);
+        for (let i = 0; i < 2; i++) {
+          data.push([stnCoords2.lat + (Math.random() - 0.5) * 0.015, stnCoords2.lng + (Math.random() - 0.5) * 0.015, baseIntensity]);
+        }
       }
     });
 
-    // Add congestion along each route
-    routes.forEach((route) => {
-      const fromCoords = route.fromCoords || { lat: 19.076, lng: 72.8776 };
-      const toCoords = route.toCoords || { lat: 19.2183, lng: 72.9781 };
-      const congestionLevel = 1 - (route.trustScore / 100);
+    // Extract precise route geometry path
+    let routePoints: Array<{ lat: number; lng: number }> = [];
+    if (targetRoute.routeGeometry && targetRoute.routeGeometry.length > 2) {
+      routePoints = targetRoute.routeGeometry;
+    } else if (targetRoute.simulation?.routeGeometry) {
+      routePoints = targetRoute.simulation.routeGeometry;
+    } else {
+      const fromCoords = targetRoute.fromCoords || { lat: 19.076, lng: 72.8776 };
+      const toCoords = targetRoute.toCoords || { lat: 19.2183, lng: 72.9781 };
+      routePoints = generateRoutePoints(fromCoords.lat, fromCoords.lng, toCoords.lat, toCoords.lng, 25);
+    }
 
-      let routePoints: Array<{ lat: number; lng: number }> = [];
-      if (route.routeGeometry && route.routeGeometry.length > 2) {
-        routePoints = route.routeGeometry;
-      } else if (route.segments && route.segments.length > 0) {
-        const segmentsPath: Array<{ lat: number; lng: number }> = [];
-        route.segments.forEach((seg: any) => {
-          if (seg.fromLatLng && segmentsPath.length === 0) segmentsPath.push(seg.fromLatLng);
-          if (seg.toLatLng) segmentsPath.push(seg.toLatLng);
-        });
-        if (segmentsPath.length > 1) routePoints = segmentsPath;
-      }
-
-      if (!routePoints.length) {
-        routePoints = generateRoutePoints(fromCoords.lat, fromCoords.lng, toCoords.lat, toCoords.lng, 15);
-      }
-
-      routePoints.forEach((point) => {
-        const value = Math.max(0.2, Math.min(1, 0.3 + congestionLevel * 0.6 + (Math.random() - 0.5) * 0.25));
-        data.push([point.lat, point.lng, value]);
-      });
+    // Add continuous congestion heatmap points along the physical route polyline
+    routePoints.forEach((point) => {
+      // Create a smooth varying intensity along the line
+      const value = Math.max(0.2, Math.min(1, 0.2 + congestionLevel * 0.6 + (Math.random() - 0.5) * 0.2));
+      data.push([point.lat, point.lng, value]);
     });
 
     return data;
@@ -90,9 +127,10 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
 
     const map = mapInstanceRef.current;
 
-    // Clear existing heatmap layer
+    // Clear ALL non-tile layers (markers, polylines, circleMarkers)
+    // so stale pins from a previous search never linger.
     map.eachLayer((layer) => {
-      if (layer instanceof L.Circle || (layer as any)._heatmap) {
+      if (!(layer instanceof L.TileLayer)) {
         map.removeLayer(layer);
       }
     });
@@ -105,82 +143,100 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
     heatmapData.forEach(([lat, lng, intensity]) => {
       const color = getColorForIntensity(intensity);
       L.circleMarker([lat, lng], {
-        radius: 5,
+        radius: 8,
         fillColor: color,
         color: color,
         weight: 0,
-        opacity: 0.6,
-        fillOpacity: 0.6,
+        opacity: 0.7,
+        fillOpacity: 0.7,
       }).addTo(map);
     });
 
-    // Add route markers
-    const allBounds: Array<[number, number]> = [];
-    routes.forEach((route, index) => {
-      const fromCoords = route.fromCoords || { lat: 19.076, lng: 72.8776 };
-      const toCoords = route.toCoords || { lat: 19.2183, lng: 72.9781 };
-      
-      const routeLineColor = route.trustScore > 70 ? "#22c55e" : route.trustScore > 50 ? "#eab308" : "#ef4444";
-      
-      // From marker
-      L.circleMarker([fromCoords.lat, fromCoords.lng], {
-        radius: 8,
-        fillColor: "#3b82f6",
-        color: "#1e40af",
-        weight: 2,
-        opacity: 1,
-        fillOpacity: 0.8,
-      })
-        .bindPopup(`<div class="text-xs"><strong>Start</strong><br/>${route.from}</div>`)
-        .addTo(map);
+    // Add route markers — only draw ONE source and ONE destination pin total 
+    // for the entire search to avoid clutter and overlapping markers from alternatives.
+    let drawnSource = false;
+    let drawnDest   = false;
 
-      // Build route line (use precise server geometry if available)
+    const allBounds: Array<[number, number]> = [];
+    
+    // Dim the map base layer slightly to make heatmap pop using a pane or CSS filter
+    const tilePane = map.getPane('tilePane');
+    if (tilePane) {
+      tilePane.style.filter = "grayscale(80%) brightness(50%) contrast(120%)";
+    }
+
+    // Only draw the target route to keep the map clean
+    const localRoutes = [selectedRoute || routes[0]].filter(Boolean);
+
+    localRoutes.forEach((route) => {
+      const fromCoords = route.fromCoords || { lat: 19.076,   lng: 72.8776 };
+      const toCoords   = route.toCoords   || { lat: 19.2183, lng: 72.9781  };
+
+      const routeLineColor = route.trustScore > 70 ? '#22c55e'
+        : route.trustScore > 50 ? '#eab308' : '#ef4444';
+
+      // ── Source pin (once total) ───────────────────────────
+      if (!drawnSource) {
+        drawnSource = true;
+        L.marker([fromCoords.lat, fromCoords.lng], {
+          icon: makePinIcon('🔴', 'linear-gradient(135deg,#ffbf00,#ff8c00)', route.from),
+          zIndexOffset: 1000,
+        })
+          .bindPopup(`<div style="font:700 12px system-ui">🔴 Origin<br/><span style="font-weight:400">${route.from}</span></div>`)
+          .addTo(map);
+      }
+
+      // ── Route polyline (one per route, different dash/color) ────────────
       const routeLinePath: Array<[number, number]> =
         route.routeGeometry && route.routeGeometry.length > 1
-          ? route.routeGeometry.map((pt: any) => [pt.lat, pt.lng])
+          ? route.routeGeometry.map((pt: any) => [pt.lat, pt.lng] as [number, number])
           : route.segments && route.segments.length > 0
-            ? route.segments.reduce((points: Array<[number, number]>, seg: any) => {
-                if (seg.fromLatLng && points.length === 0) {
-                  points.push([seg.fromLatLng.lat, seg.fromLatLng.lng]);
-                }
-                if (seg.toLatLng) {
-                  points.push([seg.toLatLng.lat, seg.toLatLng.lng]);
-                }
-                return points;
+            ? route.segments.reduce((pts: Array<[number, number]>, seg: any) => {
+                if (seg.fromLatLng && pts.length === 0) pts.push([seg.fromLatLng.lat, seg.fromLatLng.lng]);
+                if (seg.toLatLng) pts.push([seg.toLatLng.lat, seg.toLatLng.lng]);
+                return pts;
               }, [] as Array<[number, number]>)
             : [[fromCoords.lat, fromCoords.lng], [toCoords.lat, toCoords.lng]];
 
-      L.polyline(routeLinePath, {
-        color: routeLineColor,
-        weight: 3,
-        opacity: 0.8,
-        dashArray: selectedRoute?.id === route.id ? "0" : "5,5",
-      })
-        .bindPopup(
-          `<div class="text-xs">
-            <strong>${route.from} → ${route.to}</strong><br/>
-            ETA: ${route.eta} min | Cost: ₹${route.cost}<br/>
-            Traffic load: ${trafficLoadLabel(route.trustScore)}
-          </div>`
-        )
-        .addTo(map);
+      if (routeLinePath.length >= 2) {
+        L.polyline(routeLinePath, {
+          color: routeLineColor,
+          weight: selectedRoute?.id === route.id ? 5 : 3,
+          opacity: selectedRoute?.id === route.id ? 0.95 : 0.6,
+          dashArray: selectedRoute?.id === route.id ? undefined : '6 6',
+        })
+          .bindPopup(`<div style="font:700 12px system-ui">
+            ${route.from} → ${route.to}<br/>
+            <span style="font-weight:400">ETA: ${route.eta} min · ₹${route.cost}</span><br/>
+            <span style="color:${routeLineColor}">● ${trafficLoadLabel(route.trustScore)} Traffic</span>
+          </div>`)
+          .addTo(map);
+      }
 
-      // To marker
-      L.circleMarker([toCoords.lat, toCoords.lng], {
-        radius: 8,
-        fillColor: routeLineColor,
-        color: routeLineColor,
-        weight: 2,
-        opacity: 1,
-        fillOpacity: 0.8,
-      })
-        .bindPopup(`<div class="text-xs"><strong>Destination</strong><br/>${route.to}</div>`)
-        .addTo(map);
+      // ── Destination pin (once total) ───────────────────────
+      if (!drawnDest) {
+        drawnDest = true;
+        // Use green for light traffic, amber for moderate, red for heavy
+        const destGrad = route.trustScore > 70
+          ? 'linear-gradient(135deg,#13ff43,#00c830)'
+          : route.trustScore > 50
+            ? 'linear-gradient(135deg,#eab308,#ca8a04)'
+            : 'linear-gradient(135deg,#ef4444,#dc2626)';
+        L.marker([toCoords.lat, toCoords.lng], {
+          icon: makePinIcon('🏁', destGrad, route.to),
+          zIndexOffset: 1000,
+        })
+          .bindPopup(`<div style="font:700 12px system-ui">🏁 Destination<br/><span style="font-weight:400">${route.to}</span></div>`)
+          .addTo(map);
+      }
 
-      // Add to bounds
-      allBounds.push([fromCoords.lat, fromCoords.lng]);
-      allBounds.push([toCoords.lat, toCoords.lng]);
     });
+
+    const targetRoute = selectedRoute || routes[0];
+    if (targetRoute) {
+      allBounds.push([targetRoute.fromCoords?.lat || 19.07, targetRoute.fromCoords?.lng || 72.87]);
+      allBounds.push([targetRoute.toCoords?.lat || 19.07, targetRoute.toCoords?.lng || 72.87]);
+    }
 
     // Fit bounds if routes exist
     if (allBounds.length > 0) {
@@ -255,11 +311,7 @@ const RouteHeatmap = ({ routes, selectedRoute }: RouteHeatmapProps) => {
                   <p className="font-headline text-sm font-bold">
                     Route {index + 1}: {route.from} → {route.to}
                   </p>
-<<<<<<< HEAD
                   <p className="text-xs text-white/50 mt-1">{formatRouteHeadline(route.from, route.to)}</p>
-=======
-                  <p className="text-xs text-white/50 mt-1">{route.summary}</p>
->>>>>>> 1a205e81c276580b1f69d326e146e88397c22de3
                 </div>
                 <div className="text-right">
                   <div className="flex items-center gap-2 justify-end">

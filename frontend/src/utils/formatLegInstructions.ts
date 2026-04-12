@@ -34,3 +34,5 @@ export function splitLegInstruction(line: string): { from: string; to: string | 
   const to = parts.slice(1).join(' \u2192 ').trim();
   return { from: parts[0].trim(), to: to || null };
 }
+
+export const formatRouteHeadline = formatLegInstructions;
